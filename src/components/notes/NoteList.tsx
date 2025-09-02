@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import type { Note } from "@/collections/notes";
 import { NoteCard } from "./NoteCard";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,17 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, Grid2X2, List, Plus, Download, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { exportNotes, importNotes } from "@/lib/import-export";
+import { TagFilterBar } from "@/components/notes/TagFilterBar";
 import { toast } from "sonner";
 import { filterNotes } from "@/lib/filters";
+import { sortNotes } from "@/lib/sorting";
+import {
+  useQueryState,
+  parseAsString,
+  parseAsBoolean,
+  parseAsInteger,
+  parseAsStringEnum,
+} from "nuqs";
 
 type ViewMode = "grid" | "list";
 type SortBy = "newest" | "oldest" | "title";
@@ -44,16 +53,36 @@ export function NoteList({
   onMoveNote,
   onImportNotes,
 }: NoteListProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [viewMode, setViewMode] = useState<ViewMode>("grid");
-  const [sortBy, setSortBy] = useState<SortBy>("newest");
-  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useQueryState(
+    "q",
+    parseAsString.withDefault("")
+  );
+  const [viewMode, setViewMode] = useQueryState(
+    "view",
+    parseAsStringEnum(["grid", "list"]).withDefault("grid")
+  );
+  const [sortBy, setSortBy] = useQueryState(
+    "sort",
+    parseAsStringEnum(["newest", "oldest", "title"]).withDefault("newest")
+  );
+  const [activeTag, setActiveTag] = useQueryState("tag");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [simpleView, setSimpleView] = useState(false);
+  const [simpleView, setSimpleView] = useQueryState(
+    "simple",
+    parseAsBoolean.withDefault(false)
+  );
+  const [customCols, setCustomCols] = useQueryState(
+    "cols",
+    parseAsInteger.withDefault(4)
+  );
   const [useCustomCols, setUseCustomCols] = useState(false);
-  const [customCols, setCustomCols] = useState(4);
 
-  const handleExport = () => {
+  // Initialize custom-cols toggle from query param presence/value
+  useEffect(() => {
+    setUseCustomCols(customCols !== 4);
+  }, [customCols]);
+
+  const handleExport = useCallback(() => {
     try {
       exportNotes(notes);
       toast.success("Notes exported successfully");
@@ -61,13 +90,13 @@ export function NoteList({
       console.error("Export failed:", error);
       toast.error("Failed to export notes");
     }
-  };
+  }, [notes]);
 
-  const handleImportClick = () => {
+  const handleImportClick = useCallback(() => {
     fileInputRef.current?.click();
-  };
+  }, []);
 
-  const handleFileChange = async (
+  const handleFileChange = useCallback(async (
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = event.target.files?.[0];
@@ -88,7 +117,7 @@ export function NoteList({
         fileInputRef.current.value = "";
       }
     }
-  };
+  }, [onImportNotes]);
 
   // Get all unique tags from notes
   const allTags = useMemo(() => {
@@ -106,18 +135,7 @@ export function NoteList({
       tagIds: activeTag ? [activeTag] : [],
       // categoryIds and projectIds can be wired from parent/scoped contexts later
     });
-    return result.sort((a, b) => {
-      switch (sortBy) {
-        case "newest":
-          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-        case "oldest":
-          return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
-        case "title":
-          return a.title.localeCompare(b.title);
-        default:
-          return 0;
-      }
-    });
+    return sortNotes(result, sortBy);
   }, [notes, searchQuery, sortBy, activeTag]);
 
   const pinnedNotes = filteredNotes.filter((note) => note.isPinned);
@@ -182,7 +200,16 @@ export function NoteList({
           </Select>
           {viewMode === "grid" && (
             <div className="flex items-center gap-2">
-              <Switch checked={useCustomCols} onCheckedChange={setUseCustomCols} />
+              <Switch
+                checked={useCustomCols}
+                onCheckedChange={(checked) => {
+                  setUseCustomCols(checked);
+                  if (!checked) {
+                    // Reset to default columns in URL when turning off custom cols
+                    setCustomCols(4);
+                  }
+                }}
+              />
               <span className="text-sm text-muted-foreground">Custom columns</span>
               {useCustomCols && (
                 <Input
@@ -190,7 +217,11 @@ export function NoteList({
                   min={1}
                   max={8}
                   value={customCols}
-                  onChange={(e) => setCustomCols(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+                  onChange={(e) =>
+                    setCustomCols(
+                      Math.max(1, Math.min(8, Number(e.target.value) || 1))
+                    )
+                  }
                   className="w-20 h-10"
                 />
               )}
@@ -199,32 +230,13 @@ export function NoteList({
         </div>
       </div>
 
-      {/* Tags filter */}
+      {/* Tags filter (DnD + favorites via TagFilterBar) */}
       {allTags.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-muted-foreground">Filter by Tags</h3>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant={!activeTag ? "default" : "outline"}
-              size="sm"
-              onClick={() => setActiveTag(null)}
-              className="h-8"
-            >
-              All
-            </Button>
-            {allTags.map((tag) => (
-              <Button
-                key={tag}
-                variant={activeTag === tag ? "default" : "outline"}
-                size="sm"
-                onClick={() => setActiveTag(activeTag === tag ? null : tag)}
-                className="h-8"
-              >
-                {tag}
-              </Button>
-            ))}
-          </div>
-        </div>
+        <TagFilterBar
+          allTags={allTags}
+          activeTag={activeTag}
+          onChangeActive={setActiveTag}
+        />
       )}
 
       {/* Pinned notes section */}

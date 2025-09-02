@@ -1,4 +1,5 @@
-import { getNextNoteId } from "@/collections/notes";
+import { newId } from "@/lib/id";
+import { nowIso } from "@/lib/time";
 import {
   notesCollection,
   projectsCollection,
@@ -17,7 +18,6 @@ import {
   type Project,
   type CreateProjectInput,
   type UpdateProjectInput,
-  getNextProjectId,
 } from "@/collections/projects";
 
 type CollectionResult<T> = {
@@ -31,11 +31,22 @@ export const noteService = {
   // Create a new note with optimistic updates
   async create(input: CreateNoteInput): Promise<CollectionResult<Note>> {
     try {
-      const now = new Date().toISOString();
+      const now = nowIso();
       const newNote: Note = {
         ...input,
-        id: getNextNoteId(),
-        tagIds: input.tagIds || [],
+        id: newId(),
+        // Ensure required arrays exist; backfill legacy single fields
+        tagIds: Array.isArray(input.tagIds) ? input.tagIds : [],
+        projectIds: Array.isArray((input as Partial<Note>).projectIds)
+          ? ((input as Partial<Note>).projectIds as string[])
+          : (input as Partial<Note>).projectId
+          ? [(input as Partial<Note>).projectId as string]
+          : [],
+        categoryIds: Array.isArray((input as Partial<Note>).categoryIds)
+          ? ((input as Partial<Note>).categoryIds as string[])
+          : (input as Partial<Note>).categoryId
+          ? [(input as Partial<Note>).categoryId as string]
+          : [],
         isArchived: false,
         isPinned: false,
         createdAt: now,
@@ -73,7 +84,7 @@ export const noteService = {
       const updated: Note = {
         ...current,
         ...input,
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso(),
       };
 
       await baseNotesCollection.update(id, (draft) => {
@@ -144,7 +155,7 @@ export const noteService = {
   // Get all notes with reactive query
   async getAll(): Promise<CollectionResult<Note[]>> {
     try {
-      const result = await notesCollection.toArray;
+      const result: Note[] = await notesCollection.toArray;
       return {
         data: result,
         status: "success",
@@ -161,7 +172,7 @@ export const noteService = {
   // Get active notes using the pre-defined collection
   async getActiveNotes(): Promise<CollectionResult<Note[]>> {
     try {
-      const result = await activeNotesCollection.toArray;
+      const result: Note[] = await activeNotesCollection.toArray;
       return {
         data: result,
         status: "success",
@@ -180,7 +191,7 @@ export const noteService = {
   // Get archived notes using the pre-defined collection
   async getArchivedNotes(): Promise<CollectionResult<Note[]>> {
     try {
-      const result = await archivedNotesCollection.toArray;
+      const result: Note[] = await archivedNotesCollection.toArray;
       return {
         data: result,
         status: "success",
@@ -199,7 +210,7 @@ export const noteService = {
   // Get pinned notes using the pre-defined collection
   async getPinnedNotes(): Promise<CollectionResult<Note[]>> {
     try {
-      const result = await pinnedNotesCollection.toArray;
+      const result: Note[] = await pinnedNotesCollection.toArray;
       return {
         data: result,
         status: "success",
@@ -218,10 +229,15 @@ export const noteService = {
   // Get notes by project ID with reactive query
   async getByProject(projectId: string): Promise<CollectionResult<Note[]>> {
     try {
-      const allNotes = await notesCollection.toArray;
-      const filteredNotes = allNotes.filter(
-        (note) => note.projectId === projectId
-      );
+      const allNotes: Note[] = await notesCollection.toArray;
+      const filteredNotes = allNotes.filter((note: Note) => {
+        // Prefer normalized array-based relation
+        if (Array.isArray(note.projectIds)) {
+          return note.projectIds.includes(projectId);
+        }
+        // Legacy fallback
+        return (note as Partial<Note>).projectId === projectId;
+      });
       return {
         data: filteredNotes,
         status: "success",
@@ -241,9 +257,9 @@ export const noteService = {
   async search(term: string): Promise<CollectionResult<Note[]>> {
     try {
       const lowerTerm = term.toLowerCase();
-      const allNotes = await notesCollection.toArray;
+      const allNotes: Note[] = await notesCollection.toArray;
       const filteredNotes = allNotes.filter(
-        (note) =>
+        (note: Note) =>
           note.title.toLowerCase().includes(lowerTerm) ||
           note.content.toLowerCase().includes(lowerTerm)
       );
@@ -315,10 +331,10 @@ export const projectService = {
   // Create a new project with optimistic updates
   async create(input: CreateProjectInput): Promise<CollectionResult<Project>> {
     try {
-      const now = new Date().toISOString();
+      const now = nowIso();
       const newProject: Project = {
         ...input,
-        id: getNextProjectId(),
+        id: newId(),
         createdAt: now,
         updatedAt: now,
       };
@@ -356,7 +372,7 @@ export const projectService = {
       const updated: Project = {
         ...current,
         ...input,
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso(),
       };
 
       await baseProjectsCollection.update(id, (draft) => {
@@ -393,9 +409,16 @@ export const projectService = {
       const notesResult = await noteService.getByProject(id);
       if (notesResult.status === "success" && notesResult.data) {
         await Promise.all(
-          notesResult.data.map((note) =>
-            notesCollection.update(note.id, (draft) => {
-              draft.projectId = undefined;
+          notesResult.data.map((note: Note) =>
+            baseNotesCollection.update(note.id, (draft: Note) => {
+              // Normalize array relation: remove the deleted project id
+              const current = Array.isArray(draft.projectIds) ? draft.projectIds : [];
+              draft.projectIds = current.filter((pid) => pid !== id);
+              // Legacy cleanup
+              if ((draft as Partial<Note>).projectId === id) {
+                delete (draft as Partial<Note>).projectId;
+              }
+              draft.updatedAt = nowIso();
             })
           )
         );
@@ -443,7 +466,7 @@ export const projectService = {
   // Get all projects with reactive query
   async getAll(): Promise<CollectionResult<Project[]>> {
     try {
-      const result = await projectsCollection.toArray;
+      const result: Project[] = await projectsCollection.toArray;
       return {
         data: result,
         status: "success",

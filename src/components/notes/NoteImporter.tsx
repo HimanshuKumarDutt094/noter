@@ -1,11 +1,13 @@
-import { useState, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Upload } from "lucide-react";
 import type { CreateNoteInput } from "@/collections/notes";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { importNotes } from "@/lib/import-export";
 
-type NoteDraft = Omit<CreateNoteInput, "id" | "createdAt" | "updatedAt"> & {
-  id: number;
+type NoteDraft = Omit<CreateNoteInput, "id"> & {
   tempId: string; // Temporary ID for React keys
 };
 
@@ -19,51 +21,33 @@ export function NoteImporter({ onImport, onCancel }: NoteImporterProps) {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const processFile = (file: File) => {
-    const reader = new FileReader();
-
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
-      // Normalize all line endings to \n and split by one or more newlines
-      const normalizedContent = content.replace(/\r\n?|\n/g, "\n");
-      // Split by one or more newlines to handle both single and double line breaks
-      // Also handle cases where there might be extra whitespace
-      const noteContents = normalizedContent
-        .split(/\n\s*\n+/)
-        .map((note) => note.trim())
-        .filter((note) => note.length > 0);
-
-      const timestamp = Date.now();
-      const newNotes = noteContents
-        .map((content) => content.trim())
-        .filter((content) => content.length > 0)
-        .map((content, index) => {
-          const firstLine = content.split("\n")[0];
-          return {
-            id: -1, // Will be set by the database
-            tempId: `import-${timestamp}-${index}`,
-            title: firstLine?.slice(0, 50) || "Untitled Note",
-            content: content,
-            tagIds: ["imported"],
-            isArchived: false,
-            isPinned: false,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            projectIds: [],
-            categoryIds: [],
-          };
-        });
-
-      setNotes(newNotes);
-    };
-
-    reader.readAsText(file);
-  };
+  const processFile = useCallback(async (file: File) => {
+    try {
+      const parsed = await importNotes(file);
+      const ts = Date.now();
+      const drafts: NoteDraft[] = parsed.map((p, idx) => ({
+        tempId: `import-${ts}-${idx}`,
+        title: p.title,
+        content: p.content,
+        color: p.color,
+        categoryId: p.categoryId,
+        projectId: p.projectId,
+        tagIds: p.tagIds ?? [],
+        projectIds: p.projectIds ?? [],
+        categoryIds: p.categoryIds ?? [],
+        isArchived: p.isArchived ?? false,
+        isPinned: p.isPinned ?? false,
+      }));
+      setNotes(drafts);
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      processFile(file);
+      void processFile(file);
     }
   };
 
@@ -72,8 +56,8 @@ export function NoteImporter({ onImport, onCancel }: NoteImporterProps) {
     setIsDragging(false);
 
     const file = e.dataTransfer.files?.[0];
-    if (file && file.type === "text/plain") {
-      processFile(file);
+    if (file) {
+      void processFile(file);
     }
   };
 
@@ -98,15 +82,19 @@ export function NoteImporter({ onImport, onCancel }: NoteImporterProps) {
   };
 
   const handleImport = () => {
-    onImport(
-      notes.map(({ ...note }) => ({
-        ...note,
-        id: -1, // Will be set by the database
-        tagIds: note.tagIds || [],
-        isArchived: note.isArchived || false,
-        isPinned: note.isPinned || false,
-      }))
-    );
+    const payloads: CreateNoteInput[] = notes.map((n) => ({
+      title: n.title,
+      content: n.content,
+      color: n.color,
+      categoryId: n.categoryId,
+      projectId: n.projectId,
+      tagIds: n.tagIds ?? [],
+      projectIds: n.projectIds ?? [],
+      categoryIds: n.categoryIds ?? [],
+      isArchived: n.isArchived ?? false,
+      isPinned: n.isPinned ?? false,
+    }));
+    onImport(payloads);
   };
 
   if (notes.length === 0) {
@@ -150,28 +138,28 @@ export function NoteImporter({ onImport, onCancel }: NoteImporterProps) {
           <Card key={note.tempId} className="relative group">
             <CardHeader className="pb-2">
               <CardTitle className="text-lg">
-                <input
-                  type="text"
+                <Input
                   value={note.title}
                   onChange={(e) =>
                     handleUpdateNote(note.tempId, { title: e.target.value })
                   }
-                  className="w-full bg-transparent border-b border-transparent focus:border-foreground outline-none"
+                  className="w-full bg-transparent border-0 shadow-none focus-visible:ring-0"
+                  placeholder="Title"
                 />
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <textarea
+              <Textarea
                 value={note.content}
                 onChange={(e) =>
                   handleUpdateNote(note.tempId, { content: e.target.value })
                 }
-                className="w-full h-32 p-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full"
+                placeholder="Content"
               />
               <div className="mt-2 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center">
                 <div className="w-full sm:flex-1">
-                  <input
-                    type="text"
+                  <Input
                     value={note.tagIds?.join(", ") || ""}
                     onChange={(e) =>
                       handleUpdateNote(note.tempId, {
@@ -182,7 +170,7 @@ export function NoteImporter({ onImport, onCancel }: NoteImporterProps) {
                       })
                     }
                     placeholder="Add tags (comma separated)"
-                    className="text-sm w-full bg-transparent border-b border-transparent focus:border-foreground outline-none"
+                    className="text-sm w-full bg-transparent border-0 shadow-none focus-visible:ring-0"
                   />
                 </div>
                 <div className="w-full sm:w-auto flex flex-col items-end gap-2">

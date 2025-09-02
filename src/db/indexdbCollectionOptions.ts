@@ -16,7 +16,7 @@ interface IndexDBCollectionConfig<TItem extends object>
   > {
   dbName?: string; // Optional database name, defaults to 'todoist'
   tableName: string; // Required table name
-  schema: StandardSchemaV1<TItem>; // Schema for validation
+  schema?: StandardSchemaV1<TItem>; // Optional schema for validation/type inference
 }
 
 export function indexdbCollectionOptions<TItem extends { id: string | number }>(
@@ -24,35 +24,52 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
 ): CollectionConfig<TItem> {
   const db = singletonPg;
   const notificationChannel = `tanstack_db_change_${config.tableName}`;
+  // Sanitize names for function/trigger identifiers
+  const sanitizeIdent = (name: string) => name.replace(/[^a-zA-Z0-9_]/g, "_");
+  const funcName = sanitizeIdent(`${notificationChannel}_func`);
+  const triggerName = sanitizeIdent(`${notificationChannel}_trigger`);
   let isListenerRunning = true;
   let unsubscribe: (() => Promise<void>) | null = null;
   let notificationHandler: ((payload: string) => void) | null = null;
+  let initialSyncComplete = false;
+  const bufferedEvents: string[] = [];
+  // Track last seen ids to emit deletes on refetch
+  const lastSeenIds = new Set<string | number>();
 
   const sync: SyncConfig<TItem>["sync"] = async (params) => {
     const { begin, write, commit, markReady } = params;
-    // Track which IDs we've already applied to the collection to avoid duplicate inserts
+    // Track which IDs we've already applied within the current session to avoid duplicate inserts
     const seenIds = new Set<string | number>();
 
     const setupNotifications = async () => {
-      // Create notification function for real-time updates (single statement)
+      // Create notification function that handles INSERT/UPDATE/DELETE safely
       await db.query(
-        `CREATE OR REPLACE FUNCTION ${notificationChannel}_func()
+        `CREATE OR REPLACE FUNCTION "${funcName}"()
          RETURNS TRIGGER AS $$
+         DECLARE
+           payload TEXT;
          BEGIN
-           PERFORM pg_notify('${notificationChannel}', row_to_json(NEW)::text);
-           RETURN NEW;
+           IF TG_OP = 'DELETE' THEN
+             payload := json_build_object('op', TG_OP, 'id', OLD.id)::text;
+           ELSIF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
+             payload := json_build_object('op', TG_OP, 'id', NEW.id)::text;
+           ELSE
+             payload := json_build_object('op', TG_OP)::text;
+           END IF;
+           PERFORM pg_notify('${notificationChannel}', payload);
+           RETURN COALESCE(NEW, OLD);
          END;
          $$ LANGUAGE plpgsql;`
       );
 
-      // Create trigger for INSERT, UPDATE, DELETE operations (split into single statements)
+      // Create trigger for INSERT, UPDATE, DELETE operations
       await db.query(
-        `DROP TRIGGER IF EXISTS ${notificationChannel}_trigger ON "${config.tableName}";`
+        `DROP TRIGGER IF EXISTS "${triggerName}" ON "${config.tableName}";`
       );
       await db.query(
-        `CREATE TRIGGER ${notificationChannel}_trigger
+        `CREATE TRIGGER "${triggerName}"
          AFTER INSERT OR UPDATE OR DELETE ON "${config.tableName}"
-         FOR EACH ROW EXECUTE FUNCTION ${notificationChannel}_func();`
+         FOR EACH ROW EXECUTE FUNCTION "${funcName}"();`
       );
     };
 
@@ -66,34 +83,35 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
 
         begin();
 
-        // Simple approach: insert all items from database
-        // TanStack DB will handle deduplication and updates automatically
+        // Insert/update all items from database
+        const currentIds = new Set<string | number>();
         for (const row of currentData.rows) {
-          // Validate data using Standard Schema
-          let validationResult = config.schema["~standard"].validate({
-            id: row.id,
-            ...row.data,
-          });
-          if (validationResult instanceof Promise) {
-            validationResult = await validationResult;
+          // Construct item and let TanStack DB schema (if provided) validate/coerce
+          const payload: Record<string, unknown> = row.data as Record<string, unknown>;
+          const item = ({ id: row.id, ...payload }) as TItem;
+
+          try {
+            // Use insert for new IDs, update for ones we've already seen to avoid DuplicateKeySyncError
+            const opType = seenIds.has(row.id) ? "update" : "insert";
+            write({ type: opType as "insert" | "update", value: item });
+            // Mark as seen for subsequent refetch cycles
+            seenIds.add(row.id);
+            currentIds.add(row.id);
+          } catch (e) {
+            console.error(`Write failed for id ${String(row.id)} in table ${config.tableName}:`, e);
           }
-
-          if (validationResult.issues) {
-            console.warn(
-              `Validation failed for item ${row.id}:`,
-              validationResult.issues
-            );
-            continue;
-          }
-
-          const item = validationResult.value;
-
-          // Use insert for new IDs, update for ones we've already seen to avoid DuplicateKeySyncError
-          const opType = seenIds.has(row.id) ? "update" : "insert";
-          write({ type: opType as "insert" | "update", value: item });
-          // Mark as seen for subsequent refetch cycles
-          seenIds.add(row.id);
         }
+
+        // Emit deletes for rows no longer present
+        for (const id of lastSeenIds) {
+          if (!currentIds.has(id)) {
+            write({ type: "delete", value: { id } as TItem });
+          }
+        }
+
+        // Update last seen ids snapshot
+        lastSeenIds.clear();
+        currentIds.forEach((id) => lastSeenIds.add(id));
 
         commit();
       } catch (error) {
@@ -113,18 +131,14 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
         );`
       );
 
-      // Set up real-time notifications
-      await setupNotifications();
-
-      // Perform initial data fetch
-      await refetchAll();
-
-      // Listen for real-time changes using the correct PGlite API
+      // Start listening FIRST and buffer events to avoid race with initial sync
       isListenerRunning = true;
-
       notificationHandler = (payload: string) => {
-        void payload; // avoid unused param lint
         if (!isListenerRunning) return;
+        if (!initialSyncComplete) {
+          bufferedEvents.push(payload);
+          return;
+        }
         void refetchAll().catch((error) => {
           console.error(
             `Notification handler error for ${config.tableName}:`,
@@ -132,18 +146,29 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
           );
         });
       };
-
-      // Subscribe to the specific channel using idiomatic PGlite listen API
       unsubscribe = await db.listen(notificationChannel, notificationHandler);
+
+      // Set up real-time notifications (function/trigger)
+      await setupNotifications();
+
+      // Perform initial data fetch
+      await refetchAll();
+
+      // Mark ready then flush buffered events via a single refetch
+      markReady();
+      initialSyncComplete = true;
+      if (bufferedEvents.length) {
+        bufferedEvents.length = 0; // clear buffer
+        await refetchAll();
+      }
     } catch (error) {
       console.error(
         `Sync initialization failed for ${config.tableName}:`,
         error
       );
-      throw error;
-    } finally {
-      // Always mark ready, even on error
+      // Even on error, mark collection as ready to avoid blocking the app
       markReady();
+      throw error;
     }
 
     // Return cleanup function
@@ -165,7 +190,7 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
   };
 
   // Handle insert mutations
-  const onInsert = async ({ transaction }: InsertMutationFnParams<TItem>) => {
+  const onInsert = async ({ transaction }: InsertMutationFnParams<TItem>): Promise<void> => {
     try {
       await db.transaction(async (tx) => {
         for (const mutation of transaction.mutations) {
@@ -177,7 +202,6 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
           );
         }
       });
-      return transaction.mutations.map((m) => m.key);
     } catch (error) {
       console.error(`Insert error for table ${config.tableName}:`, error);
       throw error;
@@ -185,18 +209,19 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
   };
 
   // Handle update mutations
-  const onUpdate = async ({ transaction }: UpdateMutationFnParams<TItem>) => {
+  const onUpdate = async ({ transaction }: UpdateMutationFnParams<TItem>): Promise<void> => {
     try {
       await db.transaction(async (tx) => {
         for (const mutation of transaction.mutations) {
-          const { ...data } = mutation.modified;
+          const data = { ...(mutation.modified as Record<string, unknown>) };
+          // Ensure we don't persist id inside the JSON data blob
+          if ("id" in data) delete (data as Record<string, unknown>).id;
           await tx.query(
             `UPDATE "${config.tableName}" SET data = $1 WHERE id = $2`,
             [JSON.stringify(data), String(mutation.key)]
           );
         }
       });
-      return transaction.mutations.map((m) => m.key);
     } catch (error) {
       console.error(`Update error for table ${config.tableName}:`, error);
       throw error;
@@ -204,7 +229,7 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
   };
 
   // Handle delete mutations
-  const onDelete = async ({ transaction }: DeleteMutationFnParams<TItem>) => {
+  const onDelete = async ({ transaction }: DeleteMutationFnParams<TItem>): Promise<void> => {
     try {
       await db.transaction(async (tx) => {
         for (const mutation of transaction.mutations) {
@@ -213,7 +238,6 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
           ]);
         }
       });
-      return transaction.mutations.map((m) => m.key);
     } catch (error) {
       console.error(`Delete error for table ${config.tableName}:`, error);
       throw error;
@@ -224,7 +248,7 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
     id: config.id,
     schema: config.schema,
     getKey: config.getKey,
-    sync: { sync },
+    sync: { sync, rowUpdateMode: "full" },
     onInsert,
     onUpdate,
     onDelete,

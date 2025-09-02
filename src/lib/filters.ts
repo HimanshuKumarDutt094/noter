@@ -10,39 +10,43 @@ function hasAny<T>(source: ReadonlyArray<T> | undefined, targets: ReadonlyArray<
   return false;
 }
 
-export function noteMatchesProject(note: Note, projectId: string): boolean {
+// --- Normalizers (centralize legacy single-field compatibility) ---
+function normalizedProjectIds(note: Note): ReadonlyArray<string> {
+  if (Array.isArray(note.projectIds)) return note.projectIds;
+  return note.projectId ? [note.projectId] : [];
+}
+
+function normalizedCategoryIds(note: Note): ReadonlyArray<string> {
+  if (Array.isArray(note.categoryIds)) return note.categoryIds;
+  return note.categoryId ? [note.categoryId] : [];
+}
+
+// --- Curried predicates for composability ---
+export const byProject = (projectId: string) => (note: Note): boolean => {
   if (!projectId) return false;
-  if (Array.isArray(note.projectIds) && note.projectIds.includes(projectId)) return true;
-  return note.projectId === projectId;
-}
+  return normalizedProjectIds(note).includes(projectId);
+};
 
-export function noteMatchesAnyProject(note: Note, projectIds: ReadonlyArray<string>): boolean {
+export const byAnyProject = (projectIds: ReadonlyArray<string>) => (note: Note): boolean => {
   if (!projectIds || projectIds.length === 0) return true;
-  // Array path first
-  if (Array.isArray(note.projectIds) && hasAny(note.projectIds, projectIds)) return true;
-  // Legacy single path
-  return note.projectId ? projectIds.includes(note.projectId) : false;
-}
+  return hasAny(normalizedProjectIds(note), projectIds);
+};
 
-export function noteMatchesAnyCategory(note: Note, categoryIds: ReadonlyArray<string>): boolean {
+export const byAnyCategory = (categoryIds: ReadonlyArray<string>) => (note: Note): boolean => {
   if (!categoryIds || categoryIds.length === 0) return true;
-  if (Array.isArray(note.categoryIds) && hasAny(note.categoryIds, categoryIds)) return true;
-  return note.categoryId ? categoryIds.includes(note.categoryId) : false;
-}
+  return hasAny(normalizedCategoryIds(note), categoryIds);
+};
 
-export function noteMatchesAnyTag(note: Note, tagIds: ReadonlyArray<string>): boolean {
+export const byAnyTag = (tagIds: ReadonlyArray<string>) => (note: Note): boolean => {
   if (!tagIds || tagIds.length === 0) return true;
   return Array.isArray(note.tagIds) && hasAny(note.tagIds, tagIds);
-}
+};
 
-export function noteMatchesText(note: Note, text: string): boolean {
+export const byText = (text: string) => (note: Note): boolean => {
   const q = text.trim().toLowerCase();
   if (!q) return true;
-  return (
-    note.title.toLowerCase().includes(q) ||
-    note.content.toLowerCase().includes(q)
-  );
-}
+  return note.title.toLowerCase().includes(q) || note.content.toLowerCase().includes(q);
+};
 
 export type NoteFilter = {
   text?: string;
@@ -57,10 +61,12 @@ export function filterNotes(notes: ReadonlyArray<Note>, f: NoteFilter): Note[] {
   const categoryIds = f.categoryIds ?? [];
   const projectIds = f.projectIds ?? [];
 
-  return notes.filter((n) =>
-    noteMatchesText(n, text) &&
-    noteMatchesAnyTag(n, tagIds) &&
-    noteMatchesAnyCategory(n, categoryIds) &&
-    noteMatchesAnyProject(n, projectIds)
-  );
+  const predicates = [
+    byText(text),
+    byAnyTag(tagIds),
+    byAnyCategory(categoryIds),
+    byAnyProject(projectIds),
+  ];
+
+  return notes.filter((n) => predicates.every((p) => p(n)));
 }

@@ -27,6 +27,11 @@ import { z } from "zod/v4";
 import { useLiveQuery } from "@tanstack/react-db";
 import { categoriesCollection, projectsCollection } from "@/lib/db";
 import { Checkbox } from "@/components/ui/checkbox";
+import { HexColorSchema, COLORS, type ColorValue } from "@/lib/colors";
+import type { Project } from "@/collections/projects";
+import type { Category } from "@/collections/categories";
+
+// Using centralized HexColorSchema from src/lib/colors.ts
 
 // Dedicated form schema to match the editor fields exactly
 const NoteFormSchema = z.object({
@@ -35,7 +40,7 @@ const NoteFormSchema = z.object({
   tagIds: z.array(z.string()),
   projectIds: z.array(z.string()),
   categoryIds: z.array(z.string()),
-  color: z.string().nonempty(),
+  color: HexColorSchema.optional(),
   isArchived: z.boolean(),
   isPinned: z.boolean(),
 });
@@ -46,20 +51,19 @@ type NoteEditorProps = {
   note?: Note;
   onSave: (note: CreateNoteInput | UpdateNoteInput) => Promise<void>;
   onCancel: () => void;
+  initialProjectIds?: string[];
+  initialCategoryIds?: string[];
 };
 
-const COLORS = [
-  "#fef2f2",
-  "#ffedd5",
-  "#fef9c3",
-  "#ecfccb",
-  "#e0f2fe",
-  "#e0e7ff",
-  "#f3e8ff",
-  "#fce7f3",
-];
+// Using centralized COLORS palette from src/lib/colors.ts
 
-export function NoteEditor({ note, onSave, onCancel }: NoteEditorProps) {
+export function NoteEditor({
+  note,
+  onSave,
+  onCancel,
+  initialProjectIds = [],
+  initialCategoryIds = [],
+}: NoteEditorProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
 
@@ -69,18 +73,14 @@ export function NoteEditor({ note, onSave, onCancel }: NoteEditorProps) {
       title: note?.title ?? "",
       content: note?.content ?? "",
       tagIds: note?.tagIds ?? [],
-      // backfill legacy single fields into arrays
+      // arrays are the single source of truth post-migration
       categoryIds: Array.isArray(note?.categoryIds)
         ? (note?.categoryIds as string[])
-        : note?.categoryId
-        ? [note.categoryId]
-        : [],
-      color: note?.color ?? "#ffffff",
+        : initialCategoryIds,
+      color: note?.color ?? ("#ffffff" as ColorValue),
       projectIds: Array.isArray(note?.projectIds)
         ? (note?.projectIds as string[])
-        : note?.projectId
-        ? [note.projectId]
-        : [],
+        : initialProjectIds,
       isArchived: note?.isArchived ?? false,
       isPinned: note?.isPinned ?? false,
     },
@@ -90,10 +90,10 @@ export function NoteEditor({ note, onSave, onCancel }: NoteEditorProps) {
 
   // Live data for projects and categories
   const { data: allProjects = [] } = useLiveQuery(projectsCollection) as {
-    data: { id: string; name: string; color?: string }[];
+    data: Project[];
   };
   const { data: allCategories = [] } = useLiveQuery(categoriesCollection) as {
-    data: { id: string; name: string; color?: string }[];
+    data: Category[];
   };
 
   // Keep form in sync when editing an existing note changes
@@ -104,15 +104,11 @@ export function NoteEditor({ note, onSave, onCancel }: NoteEditorProps) {
       tagIds: note?.tagIds ?? [],
       categoryIds: Array.isArray(note?.categoryIds)
         ? (note?.categoryIds as string[])
-        : note?.categoryId
-        ? [note.categoryId]
-        : [],
+        : initialCategoryIds,
       color: note?.color ?? "#ffffff",
       projectIds: Array.isArray(note?.projectIds)
         ? (note?.projectIds as string[])
-        : note?.projectId
-        ? [note.projectId]
-        : [],
+        : initialProjectIds,
       isArchived: note?.isArchived ?? false,
       isPinned: note?.isPinned ?? false,
     });
@@ -120,8 +116,9 @@ export function NoteEditor({ note, onSave, onCancel }: NoteEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note?.id]);
 
-  const handleTagsChange = (tagIds: string[]) => {
-    setValue("tagIds", tagIds, { shouldValidate: true });
+  const handleTagsChange = (tags: readonly string[]) => {
+    // react-hook-form expects a mutable array; normalize from readonly
+    setValue("tagIds", Array.from(tags), { shouldValidate: true });
   };
 
   const toggleArrayValue = (
@@ -335,24 +332,24 @@ export function NoteEditor({ note, onSave, onCancel }: NoteEditorProps) {
                       >
                         <div
                           className="w-6 h-6 rounded-full border-2 border-background"
-                          style={{ backgroundColor: field.value }}
+                          style={{ backgroundColor: field.value as ColorValue }}
                         />
                       </Button>
                       {showColorPicker && (
                         <div className="absolute z-[1000] mt-2 p-4 bg-popover border rounded-lg shadow-xl min-w-[200px]">
                           <div className="grid grid-cols-4 gap-3">
-                            {COLORS.map((color) => (
+                            {COLORS.map((opt) => (
                               <button
-                                key={color}
+                                key={opt.value}
                                 type="button"
                                 className={cn(
                                   "h-8 w-8 rounded-full border-2 border-background transition-all hover:scale-110",
-                                  field.value === color &&
+                                  field.value === (opt.value as string) &&
                                     "ring-2 ring-offset-2 ring-primary scale-110"
                                 )}
-                                style={{ backgroundColor: color }}
+                                style={{ backgroundColor: opt.value }}
                                 onClick={() => {
-                                  field.onChange(color);
+                                  field.onChange(opt.value as ColorValue);
                                   setShowColorPicker(false);
                                 }}
                               />

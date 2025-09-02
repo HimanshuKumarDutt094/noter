@@ -4,12 +4,13 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Check, ChevronsUpDown, Plus } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { Category } from '@/collections/categories';
 import { createCategoryWithTimestamps } from '@/collections/categories';
 import { Input } from '@/components/ui/input';
 import { ColorPicker } from '@/components/shared/ColorPicker';
 import type { ColorValue } from '@/lib/colors';
+import { toast } from 'sonner';
 
 type CategorySelectorProps = {
   selectedCategoryId?: string;
@@ -29,8 +30,35 @@ export function CategorySelector({ selectedCategoryId, onSelectCategory, classNa
 
   const selectedCategory = categories.find((c) => c.id === selectedCategoryId);
 
+  const handleSelect = useCallback((id: string | undefined) => {
+    onSelectCategory(id);
+    setOpen(false);
+  }, [onSelectCategory]);
+
+  const handleStartCreate = useCallback(() => setCreating(true), []);
+  const handleCancelCreate = useCallback(() => setCreating(false), []);
+  const handleNameChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => setNewName(e.target.value), []);
+  const handleColorChange = useCallback((c: ColorValue) => setNewColor(c), []);
+  const handleOpenChange = useCallback((v: boolean) => setOpen(v), []);
+
+  const handleCreate = useCallback(async () => {
+    const name = newName.trim();
+    if (!name) return;
+    const dup = categories.some((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (dup) {
+      toast.error('Category already exists');
+      return;
+    }
+    const created = createCategoryWithTimestamps({ name, color: newColor });
+    await baseCategoriesCollection.insert(created);
+    onSelectCategory(created.id);
+    setNewName("");
+    setCreating(false);
+    setOpen(false);
+  }, [categories, newColor, newName, onSelectCategory]);
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -61,10 +89,7 @@ export function CategorySelector({ selectedCategoryId, onSelectCategory, classNa
                 "w-full flex items-center gap-2 p-2 text-sm hover:bg-accent hover:text-accent-foreground",
                 selectedCategoryId === category.id && "bg-accent/50"
               )}
-              onClick={() => {
-                onSelectCategory(category.id);
-                setOpen(false);
-              }}
+              onClick={() => handleSelect(category.id)}
             >
               <div 
                 className="w-3 h-3 rounded-full flex-shrink-0" 
@@ -83,26 +108,15 @@ export function CategorySelector({ selectedCategoryId, onSelectCategory, classNa
                 <Input
                   placeholder="Category name"
                   value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
+                  onChange={handleNameChange}
                 />
-                <ColorPicker value={newColor} onChange={(c) => setNewColor(c)} />
+                <ColorPicker value={newColor} onChange={handleColorChange} />
               </div>
               <div className="flex justify-end gap-2">
                 {categories.length > 0 && (
-                  <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>Cancel</Button>
+                  <Button variant="ghost" size="sm" onClick={handleCancelCreate}>Cancel</Button>
                 )}
-                <Button
-                  size="sm"
-                  onClick={async () => {
-                    if (!newName.trim()) return;
-                    const created = createCategoryWithTimestamps({ name: newName.trim(), color: newColor });
-                    await baseCategoriesCollection.insert(created);
-                    onSelectCategory(created.id);
-                    setNewName("");
-                    setCreating(false);
-                    setOpen(false);
-                  }}
-                >
+                <Button size="sm" onClick={handleCreate}>
                   Create
                 </Button>
               </div>
@@ -112,7 +126,7 @@ export function CategorySelector({ selectedCategoryId, onSelectCategory, classNa
               variant="ghost"
               size="sm"
               className="w-full justify-start rounded-none border-t"
-              onClick={() => setCreating(true)}
+              onClick={handleStartCreate}
             >
               <Plus className="mr-2 h-4 w-4" />
               Create new category

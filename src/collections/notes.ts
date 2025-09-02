@@ -1,11 +1,13 @@
 import { z } from "zod";
+import { newId } from "../lib/id";
+import { nowIso } from "../lib/time";
+import { HexColorSchema } from "../lib/colors";
 
-import { v7 } from "uuid";
 export const NoteSchema = z.object({
   id: z.string(),
   title: z.string(),
   content: z.string(),
-  color: z.string().optional(),
+  color: HexColorSchema.optional(),
   // Legacy single links (kept for migration/back-compat)
   categoryId: z.string().optional(),
   projectId: z.string().optional(),
@@ -21,25 +23,18 @@ export const NoteSchema = z.object({
 
 export type Note = z.infer<typeof NoteSchema>;
 
-export const getNextNoteId = () => v7();
-
-// Helper function to convert Date to ISO string
-export const formatDateForNote = (date: Date | string): string => {
-  if (date instanceof Date) {
-    return date.toISOString();
-  }
-  return new Date(date).toISOString();
-};
+// id/time utils are centralized in lib
 
 // Helper function to create a note with proper timestamps
 export const createNoteWithTimestamps = (input: CreateNoteInput): Note => {
-  const now = new Date().toISOString();
+  const now = nowIso();
   return {
-    id: getNextNoteId(),
+    id: newId(),
     ...input,
     // Ensure arrays are present
     projectIds: input.projectIds ?? [],
     categoryIds: input.categoryIds ?? [],
+    tagIds: input.tagIds ?? [],
     createdAt: now,
     updatedAt: now,
   };
@@ -49,6 +44,7 @@ export const createNoteWithTimestamps = (input: CreateNoteInput): Note => {
 export type CreateNoteInput = Omit<Note, "id" | "createdAt" | "updatedAt"> & {
   projectIds?: string[];
   categoryIds?: string[];
+  tagIds?: string[];
 };
 export type UpdateNoteInput = Partial<
   Omit<Note, "id" | "createdAt" | "updatedAt">

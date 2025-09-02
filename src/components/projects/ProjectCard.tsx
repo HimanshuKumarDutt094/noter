@@ -1,5 +1,8 @@
 import type { Project } from "@/collections/projects";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useCallback, useMemo } from "react";
+import type { ColorValue } from "@/lib/colors";
+import { motion } from "motion/react";
 
 type ProjectCardProps = {
   project: Project;
@@ -8,27 +11,52 @@ type ProjectCardProps = {
 };
 
 export function ProjectCard({ project, noteCount = 0, onClick }: ProjectCardProps) {
+  const createdDate = useMemo(() => {
+    try {
+      return new Date(project.createdAt).toLocaleDateString();
+    } catch {
+      return "";
+    }
+  }, [project.createdAt]);
+
+  const handleClick = useCallback(() => {
+    onClick?.(project.id);
+  }, [onClick, project.id]);
+
   return (
-    <Card className="cursor-pointer hover:shadow-md transition" onClick={() => onClick?.(project.id)}>
-      <CardHeader>
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-2">
-            {project.color && (
-              <span
-                className="inline-block h-3 w-3 rounded-full border"
-                style={{ backgroundColor: project.color }}
-                aria-hidden
-              />
-            )}
-            <CardTitle className="text-base">{project.name}</CardTitle>
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.22, ease: "easeOut" }}
+      whileHover={{ y: -2 }}
+      className="h-full"
+    >
+      <Card className="relative cursor-pointer hover:shadow-lg transition" onClick={handleClick}>
+        <div
+          className="pointer-events-none absolute inset-0 opacity-0 hover:opacity-100 transition-opacity"
+          style={{ background: "radial-gradient(120px 80px at 80% 0%, color-mix(in oklab, var(--accent) 16%, transparent), transparent 70%)" }}
+          aria-hidden
+        />
+        <CardHeader>
+          <div className="flex items-start justify-between">
+            <div className="flex items-center gap-2">
+              {project.color && (
+                <span
+                  className="inline-block h-3 w-3 rounded-full border"
+                  style={{ backgroundColor: project.color as ColorValue }}
+                  aria-hidden
+                />
+              )}
+              <CardTitle className="text-base">{project.name}</CardTitle>
+            </div>
+            <span className="text-xs text-muted-foreground">{createdDate}</span>
           </div>
-          <span className="text-xs text-muted-foreground">{new Date(project.createdAt).toLocaleDateString()}</span>
-        </div>
-        {project.excerpt && (
-          <CardDescription>{project.excerpt}</CardDescription>
-        )}
-        <div className="text-xs text-muted-foreground">{noteCount} notes</div>
-      </CardHeader>
-    </Card>
+          {project.excerpt && (
+            <CardDescription>{project.excerpt}</CardDescription>
+          )}
+          <div className="text-xs text-muted-foreground">{noteCount} notes</div>
+        </CardHeader>
+      </Card>
+    </motion.div>
   );
 }

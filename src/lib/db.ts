@@ -1,13 +1,12 @@
 import { createCollection } from "@tanstack/react-db";
-import { liveQueryCollectionOptions, eq } from "@tanstack/react-db";
+import { liveQueryCollectionOptions } from "@tanstack/react-db";
+import { eq, or, inArray } from "@tanstack/react-db";
 import { NoteSchema, type Note } from "@/collections/notes";
 import { ProjectSchema, type Project } from "@/collections/projects";
 import { CategorySchema, type Category } from "@/collections/categories";
 import { TagSchema, type Tag } from "@/collections/categories";
+import { PreferencesSchema, type Preferences } from "@/collections/preferences";
 import { indexdbCollectionOptions } from "@/db/indexdbCollectionOptions";
-import { noteMatchesAnyProject } from "@/lib/filters";
-
-// Database collections using IndexDB
 
 // Base collection for notes with Electric SQL sync
 const baseNotesCollection = createCollection(
@@ -18,6 +17,25 @@ const baseNotesCollection = createCollection(
     dbName: "todoist",
 
     getKey: (item: Note) => item.id,
+  })
+);
+
+// Base collection for user preferences (single-row for now)
+const basePreferencesCollection = createCollection(
+  indexdbCollectionOptions({
+    id: "preferences",
+    schema: PreferencesSchema,
+    tableName: "preferences",
+    dbName: "todoist",
+    getKey: (item: Preferences) => item.id,
+  })
+);
+
+// Live collection for preferences (may contain one row)
+export const preferencesCollection = createCollection(
+  liveQueryCollectionOptions({
+    id: "preferences-live",
+    query: (q) => q.from({ pref: basePreferencesCollection }),
   })
 );
 
@@ -87,19 +105,12 @@ export const pinnedNotesCollection = createCollection(
 );
 
 // Helper function to get notes by project ID
+/**
+ * @deprecated Use getNotesByProjects([projectId]) instead.
+ * Kept for backward compatibility; delegates to the array-based API.
+ */
 export const getNotesByProject = (projectId: string) => {
-  return createCollection(
-    liveQueryCollectionOptions({
-      id: `project-notes-${projectId}`,
-      query: (q) =>
-        q
-          .from({ note: baseNotesCollection })
-          .where(({ note }) =>
-            eq(note.projectId as unknown as string, projectId)
-          )
-          .orderBy(({ note }) => note.updatedAt, "desc"),
-    })
-  );
+  return getNotesByProjects([projectId]);
 };
 
 // Multi-project helper (legacy-safe: supports array and single projectId)
@@ -108,11 +119,25 @@ export const getNotesByProjects = (projectIds: readonly string[]) => {
   return createCollection(
     liveQueryCollectionOptions({
       id: `project-notes-many-${ids.sort().join("-")}`,
-      query: (q) =>
-        q
-          .from({ note: baseNotesCollection })
-          .where(({ note }) => (ids.length === 0 ? true : noteMatchesAnyProject(note as unknown as Note, ids)))
-          .orderBy(({ note }) => note.updatedAt, "desc"),
+      query: (q) => {
+        let qb = q.from({ note: baseNotesCollection });
+        if (ids.length > 0) {
+          // Build an expression that matches if any of the provided ids match either projectId or projectIds[]
+          qb = qb.where(({ note }) => {
+            // Fold: or(or(...), ...)
+            const exprs = ids.map((id) =>
+              or(eq(note.projectId, id), inArray(id, note.projectIds))
+            );
+            // Combine all with or()
+            let combined = exprs[0]!;
+            for (let i = 1; i < exprs.length; i++) {
+              combined = or(combined, exprs[i]!);
+            }
+            return combined;
+          });
+        }
+        return qb.orderBy(({ note }) => note.updatedAt, "desc");
+      },
     })
   );
 };
@@ -176,10 +201,17 @@ export const db = {
   projects: baseProjectsCollection,
   categories: baseCategoriesCollection,
   tags: baseTagsCollection,
+  preferences: basePreferencesCollection,
 };
 
 // Export base collections for direct access if needed
-export { baseNotesCollection, baseProjectsCollection, baseCategoriesCollection, baseTagsCollection };
+export {
+  baseNotesCollection,
+  baseProjectsCollection,
+  baseCategoriesCollection,
+  baseTagsCollection,
+  basePreferencesCollection,
+};
 
 // Re-export types for convenience
 export type { Note } from "@/collections/notes";

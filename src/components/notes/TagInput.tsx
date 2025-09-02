@@ -1,15 +1,17 @@
-import { useState, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { X, Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { Tag } from "@/collections/categories";
+import { getTextColorForBackground, type ColorValue } from "@/lib/colors";
 
 type TagInputProps = {
-  value: string[];
-  onChange: (tags: string[]) => void;
-  availableTags?: Tag[];
+  value: readonly string[];
+  onChange: (tags: readonly string[]) => void;
+  availableTags?: readonly Tag[];
   className?: string;
+  onCreateTag?: (name: string) => void;
 };
 
 export function TagInput({
@@ -17,29 +19,29 @@ export function TagInput({
   onChange,
   availableTags = [],
   className,
+  onCreateTag,
 }: TagInputProps) {
   const [inputValue, setInputValue] = useState("");
   const [isInputFocused, setIsInputFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const handleAddTag = (tagId: string) => {
+  const handleAddTag = useCallback((tagId: string) => {
     if (!value.includes(tagId)) {
       onChange([...value, tagId]);
     }
     setInputValue("");
-  };
+  }, [onChange, value]);
 
-  const handleRemoveTag = (tagId: string) => {
+  const handleRemoveTag = useCallback((tagId: string) => {
     onChange(value.filter((id) => id !== tagId));
-  };
+  }, [onChange, value]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (["Enter", "Tab", ","].includes(e.key)) {
       e.preventDefault();
       const val = inputValue.trim();
 
       if (val && !value.includes(val)) {
-        // Check if this matches an existing tag
         const existingTag = availableTags.find(
           (tag) => tag.name.toLowerCase() === val.toLowerCase()
         );
@@ -47,18 +49,19 @@ export function TagInput({
         if (existingTag) {
           handleAddTag(existingTag.id);
         } else {
-          // TODO: Show dialog to create new tag
-          console.log("Create new tag:", val);
+          onCreateTag?.(val);
         }
       }
     }
-  };
+  }, [availableTags, handleAddTag, inputValue, onCreateTag, value]);
 
-  const filteredTags = availableTags.filter(
-    (tag) =>
-      !value.includes(tag.id) &&
-      tag.name.toLowerCase().includes(inputValue.toLowerCase())
-  );
+  const filteredTags = useMemo(() =>
+    availableTags.filter(
+      (tag) =>
+        !value.includes(tag.id) &&
+        tag.name.toLowerCase().includes(inputValue.toLowerCase())
+    )
+  , [availableTags, inputValue, value]);
 
   return (
     <div className={cn("space-y-2", className)}>
@@ -72,7 +75,7 @@ export function TagInput({
               key={tagId}
               variant="secondary"
               className="flex items-center gap-1 px-2 py-1 text-sm font-medium"
-              style={{ backgroundColor: tag.color }}
+              style={{ backgroundColor: tag.color as ColorValue, color: getTextColorForBackground(tag.color as ColorValue) }}
             >
               {tag.name}
               <button
@@ -115,7 +118,7 @@ export function TagInput({
                   >
                     <div
                       className="w-3 h-3 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: tag.color }}
+                      style={{ backgroundColor: tag.color as ColorValue }}
                     />
                     {tag.name}
                   </button>
@@ -125,8 +128,7 @@ export function TagInput({
                   className="w-full text-left px-2 py-1.5 text-sm hover:bg-accent rounded-sm flex items-center gap-2 text-muted-foreground"
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    // TODO: Show create tag dialog
-                    console.log("Create tag:", inputValue);
+                    onCreateTag?.(inputValue.trim());
                   }}
                 >
                   <Plus className="h-3.5 w-3.5" />

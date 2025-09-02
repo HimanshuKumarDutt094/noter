@@ -1,22 +1,52 @@
 import type { Note } from "@/collections/notes";
+import { z } from "zod";
 
+// SSR-safe export: no-op with warning when document is unavailable
 export const exportNotes = (notes: Note[], filename = "notes-export.json") => {
   const dataStr = JSON.stringify(notes, null, 2);
-  const dataUri = `data:application/json;charset=utf-8,${encodeURIComponent(
-    dataStr
-  )}`;
+  // Guard for SSR/test environments
+  if (typeof document === "undefined") {
+    console.warn("exportNotes skipped: document is not available in this environment");
+    return;
+  }
 
-  const exportFileDefaultName = filename;
+  const dataUri = `data:application/json;charset=utf-8,${encodeURIComponent(dataStr)}`;
   const linkElement = document.createElement("a");
   linkElement.setAttribute("href", dataUri);
-  linkElement.setAttribute("download", exportFileDefaultName);
+  linkElement.setAttribute("download", filename);
   linkElement.click();
 };
 
+// Zod schema for import validation (legacy-safe)
+const ImportNoteSchema = z
+  .object({
+    title: z.string().min(1).catch("Untitled Note"),
+    content: z.string().catch(""),
+    color: z.string().optional().nullable(),
+    // Legacy single-field relations
+    projectId: z.string().optional().nullable(),
+    categoryId: z.string().optional().nullable(),
+    // Normalized arrays
+    projectIds: z.array(z.string()).optional(),
+    categoryIds: z.array(z.string()).optional(),
+    tagIds: z.array(z.string()).optional(),
+    isArchived: z.boolean().optional(),
+    isPinned: z.boolean().optional(),
+  })
+  .passthrough();
+
+type ImportPayload = Omit<Note, "id" | "createdAt" | "updatedAt">;
+
 export const importNotes = (
   file: File
-): Promise<Array<Omit<Note, "id" | "createdAt" | "updatedAt">>> => {
+): Promise<Array<ImportPayload>> => {
   return new Promise((resolve, reject) => {
+    // Guard for non-browser environments
+    if (typeof FileReader === "undefined") {
+      reject(new Error("FileReader is not available in this environment"));
+      return;
+    }
+
     const reader = new FileReader();
 
     reader.onload = (event) => {
@@ -34,18 +64,17 @@ export const importNotes = (
 
           const notes = lines.map((line) => {
             const title = line.length > 60 ? `${line.slice(0, 57)}...` : line;
-            return {
+            const payload: ImportPayload = {
               title,
               content: line,
               color: undefined,
-              categoryId: undefined,
               tagIds: [],
-              projectId: undefined,
               projectIds: [],
               categoryIds: [],
               isArchived: false,
               isPinned: false,
-            } as Omit<Note, "id" | "createdAt" | "updatedAt">;
+            };
+            return payload;
           });
 
           resolve(notes);
@@ -58,28 +87,50 @@ export const importNotes = (
           throw new Error("Invalid file format: expected an array of notes");
         }
 
-        const normalized = raw.map((noteObj) => {
-          const note = noteObj as Partial<Note>;
-          const title = (note.title ?? "Untitled Note").toString();
-          const contentStr = (note.content ?? "").toString();
-          const tagIds = Array.isArray(note.tagIds)
-            ? note.tagIds.map((t) => t.toString())
-            : [];
+        const errors: Array<{ index: number; message: string }> = [];
+        const normalized: ImportPayload[] = [];
 
-          const payload: Omit<Note, "id" | "createdAt" | "updatedAt"> = {
-            title,
-            content: contentStr,
-            color: note.color,
-            categoryId: note.categoryId,
+        raw.forEach((item, idx) => {
+          const parsed = ImportNoteSchema.safeParse(item);
+          if (!parsed.success) {
+            errors.push({ index: idx, message: parsed.error.message });
+            return;
+          }
+          const n = parsed.data;
+          const projectIds = Array.isArray(n.projectIds)
+            ? n.projectIds
+            : n.projectId
+            ? [n.projectId]
+            : [];
+          const categoryIds = Array.isArray(n.categoryIds)
+            ? n.categoryIds
+            : n.categoryId
+            ? [n.categoryId]
+            : [];
+          const tagIds = Array.isArray(n.tagIds) ? n.tagIds : [];
+
+          const payload: ImportPayload = {
+            title: n.title,
+            content: n.content,
+            color: n.color ?? undefined,
+            // Keep legacy single fields for compatibility if present
+            projectId: n.projectId ?? (projectIds[0] ?? undefined),
+            categoryId: n.categoryId ?? (categoryIds[0] ?? undefined),
+            // Normalized arrays
+            projectIds,
+            categoryIds,
             tagIds,
-            projectId: note.projectId,
-            projectIds: note.projectIds ?? [],
-            categoryIds: note.categoryIds ?? [],
-            isArchived: Boolean(note.isArchived),
-            isPinned: Boolean(note.isPinned),
+            isArchived: Boolean(n.isArchived),
+            isPinned: Boolean(n.isPinned),
           };
-          return payload;
+          normalized.push(payload);
         });
+
+        if (errors.length > 0) {
+          const msg = `Failed to parse ${errors.length} items: ` +
+            errors.map((e) => `#${e.index}: ${e.message}`).join("; ");
+          throw new Error(msg);
+        }
 
         resolve(normalized);
       } catch (error) {

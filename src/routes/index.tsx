@@ -1,6 +1,7 @@
 import { RouterProvider } from "react-router";
 import { router } from "./router";
 import type { JSX } from "react";
+import { NuqsAdapter } from "nuqs/adapters/react-router/v7";
 
 /**
  * AppRouter Component
@@ -11,5 +12,9 @@ import type { JSX } from "react";
  * @returns {JSX.Element} The router provider with the application routes
  */
 export function AppRouter(): JSX.Element {
-  return <RouterProvider router={router} />;
+  return (
+    <NuqsAdapter>
+      <RouterProvider router={router} />
+    </NuqsAdapter>
+  );
 }

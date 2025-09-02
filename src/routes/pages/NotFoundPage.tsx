@@ -1,4 +1,6 @@
 import { useNavigate } from "react-router";
+import { Button } from "@/components/ui/button";
+import { routes } from "@/routes/routePaths";
 
 export function NotFoundPage() {
   const navigate = useNavigate();
@@ -19,19 +21,9 @@ export function NotFoundPage() {
                 Sorry, we couldn't find the page you're looking for.
               </p>
             </div>
-            <div className="mt-10 flex space-x-3 sm:border-l sm:border-transparent sm:pl-6">
-              <button
-                onClick={() => navigate(-1)}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                Go back
-              </button>
-              <button
-                onClick={() => navigate("/")}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                Go home
-              </button>
+            <div className="mt-10 flex gap-3 sm:border-l sm:border-transparent sm:pl-6">
+              <Button onClick={() => navigate(-1)}>Go back</Button>
+              <Button variant="outline" onClick={() => navigate(routes.home())}>Go home</Button>
             </div>
           </div>
         </main>

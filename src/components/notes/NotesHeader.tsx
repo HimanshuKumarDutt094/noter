@@ -1,8 +1,15 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Plus, Filter, LayoutGrid, List } from "lucide-react";
-import { useState, useRef, type ChangeEvent } from "react";
+import { useState, useRef, useCallback, type ChangeEvent } from "react";
 import { toast } from "sonner";
 
 type NotesHeaderProps = {
@@ -23,7 +30,7 @@ export function NotesHeader({
   const [isSimpleView, setIsSimpleView] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -42,13 +49,23 @@ export function NotesHeader({
         fileInputRef.current.value = "";
       }
     }
-  };
+  }, [onImportNotes]);
 
-  const handleViewToggle = () => {
+  const handleViewToggle = useCallback(() => {
     const newViewState = !isSimpleView;
     setIsSimpleView(newViewState);
     onViewToggle(newViewState);
-  };
+  }, [isSimpleView, onViewToggle]);
+
+  const handleSearchChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => onSearch(e.target.value),
+    [onSearch]
+  );
+
+  const handleFilterChange = useCallback(
+    (value: string) => onFilterChange(value),
+    [onFilterChange]
+  );
 
   return (
     <div className="flex flex-col gap-4 mb-6">
@@ -97,7 +114,7 @@ export function NotesHeader({
         <div className="flex-1">
           <Input
             placeholder="Search notes..."
-            onChange={(e) => onSearch(e.target.value)}
+            onChange={handleSearchChange}
             className="w-full"
           />
         </div>
@@ -108,17 +125,17 @@ export function NotesHeader({
               <Filter className="inline h-4 w-4 mr-1" />
               Filter by:
             </Label>
-            <select
-              id="filter"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-              onChange={(e) => onFilterChange(e.target.value)}
-              defaultValue=""
-            >
-              <option value="">All Notes</option>
-              <option value="pinned">Pinned</option>
-              <option value="recent">Recently Updated</option>
-              <option value="oldest">Oldest First</option>
-            </select>
+            <Select onValueChange={handleFilterChange} defaultValue="">
+              <SelectTrigger id="filter" className="w-[200px] h-10">
+                <SelectValue placeholder="All Notes" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">All Notes</SelectItem>
+                <SelectItem value="pinned">Pinned</SelectItem>
+                <SelectItem value="recent">Recently Updated</SelectItem>
+                <SelectItem value="oldest">Oldest First</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </div>

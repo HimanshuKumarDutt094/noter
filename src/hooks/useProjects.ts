@@ -5,17 +5,21 @@ import {
   baseProjectsCollection,
   type Project,
 } from "@/lib/db";
-import { v7 } from "uuid";
+import type { CreateProjectInput } from "@/collections/projects";
+import { newId } from "@/lib/id";
+import { nowIso } from "@/lib/time";
 
 export function useProjects() {
   const { data: projects = [], isLoading } = useLiveQuery(projectsCollection);
 
   const createProject = useCallback(
-    async (project: Omit<Project, "id" | "createdAt" | "updatedAt">) => {
-      const now = new Date().toISOString();
+    async (project: CreateProjectInput) => {
+      const now = nowIso();
       return baseProjectsCollection.insert({
         ...project,
-        id: v7(),
+        // ensure mutable array type for TS compatibility
+        categoryIds: project.categoryIds ? [...project.categoryIds] : [],
+        id: newId(),
         createdAt: now,
         updatedAt: now,
       });
@@ -31,7 +35,7 @@ export function useProjects() {
       await baseProjectsCollection.update(id, (draft) => {
         Object.assign(draft, {
           ...updates,
-          updatedAt: new Date().toISOString(),
+          updatedAt: nowIso(),
         });
       });
     },

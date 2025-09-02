@@ -11,12 +11,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { X, Save, Trash2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLiveQuery } from "@tanstack/react-db";
 import { projectsCollection, categoriesCollection } from "@/lib/db";
 import { TagInput } from "@/components/ui/tag-input";
 import type { Note } from "@/collections/notes";
 import type { Category } from "@/collections/categories";
+import type { Project } from "@/collections/projects";
+import { nowIso } from "@/lib/time";
 
 type NoteDialogProps = {
   open: boolean;
@@ -40,21 +42,13 @@ export function NoteDialog({
   const [tags, setTags] = useState<string[]>(initialNote?.tagIds || []);
   const [isPinned, setIsPinned] = useState(initialNote?.isPinned || false);
   const [projectIds, setProjectIds] = useState<string[]>(
-    Array.isArray(initialNote?.projectIds)
-      ? (initialNote?.projectIds as string[])
-      : initialNote?.projectId
-      ? [initialNote.projectId]
-      : []
+    Array.isArray(initialNote?.projectIds) ? (initialNote?.projectIds as string[]) : []
   );
   const [categoryIds, setCategoryIds] = useState<string[]>(
-    Array.isArray(initialNote?.categoryIds)
-      ? (initialNote?.categoryIds as string[])
-      : initialNote?.categoryId
-      ? [initialNote.categoryId]
-      : []
+    Array.isArray(initialNote?.categoryIds) ? (initialNote?.categoryIds as string[]) : []
   );
 
-  const { data: allProjects = [] } = useLiveQuery(projectsCollection) as { data: { id: string; name: string; color?: string }[] };
+  const { data: allProjects = [] } = useLiveQuery(projectsCollection) as { data: Project[] };
   const { data: allCategories = [] } = useLiveQuery(categoriesCollection) as { data: Category[] };
 
   // Reset form when note changes or dialog opens/closes
@@ -64,49 +58,32 @@ export function NoteDialog({
       setContent(initialNote?.content || "");
       setTags(initialNote?.tagIds || []);
       setIsPinned(initialNote?.isPinned || false);
-      setProjectIds(
-        Array.isArray(initialNote?.projectIds)
-          ? (initialNote?.projectIds as string[])
-          : initialNote?.projectId
-          ? [initialNote.projectId]
-          : []
-      );
-      setCategoryIds(
-        Array.isArray(initialNote?.categoryIds)
-          ? (initialNote?.categoryIds as string[])
-          : initialNote?.categoryId
-          ? [initialNote.categoryId]
-          : []
-      );
+      setProjectIds(Array.isArray(initialNote?.projectIds) ? (initialNote?.projectIds as string[]) : []);
+      setCategoryIds(Array.isArray(initialNote?.categoryIds) ? (initialNote?.categoryIds as string[]) : []);
     }
   }, [open, initialNote]);
 
-  const handleSave = () => {
+  const handleSave = useCallback(() => {
     const updatedNote: Partial<Note> = {
       ...initialNote,
-      title: title.trim(),
+      title: title.trim() || "Untitled Note",
       content: content.trim(),
       tagIds: tags,
       isPinned,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso(),
       projectIds: projectIds,
       categoryIds: categoryIds,
     };
-
-    if (!updatedNote.title) {
-      updatedNote.title = "Untitled Note";
-    }
-
     onSave(updatedNote);
     onOpenChange(false);
-  };
+  }, [categoryIds, content, initialNote, isPinned, onOpenChange, onSave, projectIds, tags, title]);
 
-  const handleDelete = () => {
+  const handleDelete = useCallback(() => {
     if (onDelete && initialNote?.id) {
       onDelete(initialNote.id);
     }
     onOpenChange(false);
-  };
+  }, [initialNote?.id, onDelete, onOpenChange]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -144,13 +121,7 @@ export function NoteDialog({
                   >
                     Pin note
                   </Label>
-                  <input
-                    id="pinned"
-                    type="checkbox"
-                    checked={isPinned}
-                    onChange={(e) => setIsPinned(e.target.checked)}
-                    className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                  />
+                  <Checkbox id="pinned" checked={isPinned} onCheckedChange={(v) => setIsPinned(v === true)} />
                 </div>
               )}
             </div>

@@ -1,10 +1,12 @@
 import { useNavigate } from "react-router";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
-import { notesCollection } from "@/lib/db";
-import { getNextNoteId } from "@/collections/notes";
+import { baseNotesCollection } from "@/lib/db";
+import { newId } from "@/lib/id";
+import { nowIso } from "@/lib/time";
 import { NoteImporter } from "@/components/notes/NoteImporter";
 import type { CreateNoteInput } from "@/collections/notes";
+import { routes } from "@/routes/routePaths";
 
 export function ImportView() {
   const navigate = useNavigate();
@@ -18,15 +20,15 @@ export function ImportView() {
     const toastId = toast.loading(`Importing ${notes.length} notes...`);
 
     try {
-      const now = new Date();
+      const now = nowIso();
 
       // Process each note with a small delay to avoid UI freeze
       for (const note of notes) {
-        await notesCollection.insert({
+        await baseNotesCollection.insert({
           ...note,
-          id: getNextNoteId(),
-          createdAt: String(now),
-          updatedAt: String(now),
+          id: newId(),
+          createdAt: now,
+          updatedAt: now,
           isArchived: note.isArchived ?? false,
           isPinned: note.isPinned ?? false,
           tagIds: note.tagIds ?? [],
@@ -36,7 +38,7 @@ export function ImportView() {
       toast.success(`Successfully imported ${notes.length} notes!`, {
         id: toastId,
       });
-      navigate("/notes");
+      navigate(routes.notes.index());
     } catch (error) {
       console.error("Error importing notes:", error);
       toast.error("Failed to import some notes. Please try again.", {

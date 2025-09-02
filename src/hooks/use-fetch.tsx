@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { useMemo } from "react";
 
 export interface TypeSafeFetchOptions extends Omit<RequestInit, "method"> {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -36,15 +37,25 @@ export function useFetch<T = unknown>(
   options?: UseFetchOptions<T>
 ) {
   const [status, setStatus] = useState<FetchStatus>("idle");
-  const [data, setData] = useState<T | null>(null);
+  const [data, setData] = useState<T | undefined>(undefined);
   const [error, setError] = useState<FetchError | null>(null);
+
+  // Memoize fetch options to avoid re-creating callbacks on every render
+  const { create, fetchOptions } = options ?? {};
+  const stableFetchOptions = useMemo(() => {
+    if (!fetchOptions) return undefined;
+    // Shallow-copy headers and options to a stable reference
+    const headers = fetchOptions.headers ? { ...fetchOptions.headers } : undefined;
+    const { method, body, ...rest } = fetchOptions;
+    return { ...(rest as Record<string, unknown>), method, body, headers } as TypeSafeFetchOptions;
+  }, [fetchOptions]);
 
   const fetchData = useCallback(
     async (signal?: AbortSignal) => {
       setStatus("loading");
       setError(null);
       try {
-        const response = await fetch(url, { ...options?.fetchOptions, signal });
+        const response = await fetch(url, { ...(stableFetchOptions ?? {}), signal });
         if (!response.ok) {
           const error: FetchError = {
             code: `HTTP_${response.status}`,
@@ -53,8 +64,8 @@ export function useFetch<T = unknown>(
           throw error;
         }
         const rawData = await response.json();
-        if (options?.create) {
-          const result = options.create(rawData);
+        if (create) {
+          const result = create(rawData);
           setData(result);
         } else {
           setData(rawData as T);
@@ -80,13 +91,12 @@ export function useFetch<T = unknown>(
         setStatus("error");
       }
     },
-    [url, options]
+    [url, create, stableFetchOptions]
   );
 
   const refetch = useCallback(() => {
     const controller = new AbortController();
-    fetchData(controller.signal);
-    return () => controller.abort();
+    void fetchData(controller.signal);
   }, [fetchData]);
 
   useEffect(() => {
@@ -98,7 +108,7 @@ export function useFetch<T = unknown>(
 
   return { status, data, error, refetch } as {
     status: FetchStatus;
-    data: T | null;
+    data: T | undefined;
     error: FetchError | null;
     refetch: () => void;
   };

@@ -1,9 +1,9 @@
 import { useCallback } from "react";
 import { useLiveQuery } from "@tanstack/react-db";
-import { notesCollection, pinnedNotes } from "@/lib/db";
+import { notesCollection, pinnedNotes, baseNotesCollection } from "@/lib/db";
 import type { Note } from "@/lib/db";
-import { formatDateForNote } from "@/collections/notes";
-import { v7 } from "uuid";
+import { newId } from "@/lib/id";
+import { nowIso } from "@/lib/time";
 
 export function useNotes(projectId?: string) {
   const notesQuery = useLiveQuery(notesCollection);
@@ -12,21 +12,21 @@ export function useNotes(projectId?: string) {
   const { data: allNotes = [], isLoading } = notesQuery;
   const { data: allPinned = [] } = pinnedQuery;
 
-  // Filter notes by projectId if provided
+  // Filter notes by projectId if provided (arrays-only post-migration)
   const notes = projectId
-    ? allNotes.filter((note) => note.projectId === projectId)
+    ? allNotes.filter((note) => Array.isArray(note.projectIds) && note.projectIds.includes(projectId))
     : allNotes;
 
   const pinned = projectId
-    ? allPinned.filter((note) => note.projectId === projectId)
+    ? allPinned.filter((note) => Array.isArray(note.projectIds) && note.projectIds.includes(projectId))
     : allPinned;
 
   const createNote = useCallback(
     async (note: Omit<Note, "id" | "createdAt" | "updatedAt">) => {
-      const now = formatDateForNote(new Date());
-      return notesCollection.insert({
+      const now = nowIso();
+      return baseNotesCollection.insert({
         ...note,
-        id: v7(),
+        id: newId(),
         createdAt: now,
         updatedAt: now,
       });
@@ -39,10 +39,10 @@ export function useNotes(projectId?: string) {
       id: string,
       updates: Partial<Omit<Note, "id" | "createdAt" | "updatedAt">>
     ) => {
-      await notesCollection.update(id, (draft) => {
+      await baseNotesCollection.update(id, (draft) => {
         Object.assign(draft, {
           ...updates,
-          updatedAt: formatDateForNote(new Date()),
+          updatedAt: nowIso(),
         });
       });
     },
@@ -50,21 +50,21 @@ export function useNotes(projectId?: string) {
   );
 
   const togglePin = useCallback(async (id: string) => {
-    await notesCollection.update(id, (draft) => {
+    await baseNotesCollection.update(id, (draft) => {
       draft.isPinned = !draft.isPinned;
-      draft.updatedAt = formatDateForNote(new Date());
+      draft.updatedAt = nowIso();
     });
   }, []);
 
   const toggleArchive = useCallback(async (id: string) => {
-    await notesCollection.update(id, (draft) => {
+    await baseNotesCollection.update(id, (draft) => {
       draft.isArchived = !draft.isArchived;
-      draft.updatedAt = formatDateForNote(new Date());
+      draft.updatedAt = nowIso();
     });
   }, []);
 
   const deleteNote = useCallback(async (id: string) => {
-    await notesCollection.delete(id);
+    await baseNotesCollection.delete(id);
   }, []);
 
   return {

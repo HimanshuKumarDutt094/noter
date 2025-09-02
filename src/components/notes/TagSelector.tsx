@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { X } from 'lucide-react';
 
 interface TagSelectorProps {
-  selectedTags: string[];
-  onTagsChange: (tags: string[]) => void;
-  availableTags?: string[];
+  selectedTags: readonly string[];
+  onTagsChange: (tags: readonly string[]) => void;
+  availableTags?: readonly string[];
   placeholder?: string;
+  onCreateTag?: (name: string) => void;
 }
 
 const EMPTY: string[] = [];
@@ -17,37 +18,35 @@ export function TagSelector({
   onTagsChange,
   availableTags,
   placeholder = 'Add a tag...',
+  onCreateTag,
 }: TagSelectorProps) {
   const [inputValue, setInputValue] = useState('');
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-
   // Stabilize arrays to avoid new [] identity each render
-  const safeAvailableTags = availableTags ?? EMPTY;
-  const safeSelectedTags = selectedTags ?? EMPTY;
+  const safeAvailableTags = useMemo(
+    () => availableTags ?? EMPTY,
+    [availableTags]
+  );
+  const safeSelectedTags = useMemo(
+    () => selectedTags ?? EMPTY,
+    [selectedTags]
+  );
 
-  useEffect(() => {
+  const suggestions = useMemo(() => {
     const query = inputValue.trim();
-    if (query) {
-      const filtered = safeAvailableTags
-        .filter(tag =>
-          tag.toLowerCase().includes(query.toLowerCase()) &&
-          !safeSelectedTags.includes(tag)
-        );
-      // Only set when changed (length or content)
-      const sameLength = filtered.length === suggestions.length;
-      const sameContent = sameLength && filtered.every((t, i) => t === suggestions[i]);
-      if (!sameContent) setSuggestions(filtered);
-    } else {
-      if (suggestions.length !== 0) setSuggestions([]);
-    }
-  }, [inputValue, safeAvailableTags, safeSelectedTags, suggestions]);
+    if (!query) return EMPTY;
+    const q = query.toLowerCase();
+    return safeAvailableTags
+      .filter((tag) => tag.toLowerCase().includes(q) && !safeSelectedTags.includes(tag));
+  }, [inputValue, safeAvailableTags, safeSelectedTags]);
 
   const handleAddTag = (tag: string) => {
     if (tag && !safeSelectedTags.includes(tag)) {
       onTagsChange([...safeSelectedTags, tag]);
+      if (!safeAvailableTags.includes(tag)) {
+        onCreateTag?.(tag);
+      }
     }
     setInputValue('');
-    setSuggestions([]);
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
@@ -87,7 +86,6 @@ export function TagSelector({
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          onBlur={() => setSuggestions([])}
           placeholder={placeholder}
           className="w-full"
         />
