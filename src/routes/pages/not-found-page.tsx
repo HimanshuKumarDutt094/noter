@@ -1,6 +1,6 @@
-import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
-import { routes } from "@/routes/routePaths";
+import { routes } from "@/routes/route-paths";
+import { useNavigate } from "react-router";
 
 export function NotFoundPage() {
   const navigate = useNavigate();
@@ -23,7 +23,9 @@ export function NotFoundPage() {
             </div>
             <div className="mt-10 flex gap-3 sm:border-l sm:border-transparent sm:pl-6">
               <Button onClick={() => navigate(-1)}>Go back</Button>
-              <Button variant="outline" onClick={() => navigate(routes.home())}>Go home</Button>
+              <Button variant="outline" onClick={() => navigate(routes.home())}>
+                Go home
+              </Button>
             </div>
           </div>
         </main>

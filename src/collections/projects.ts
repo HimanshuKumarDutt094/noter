@@ -1,14 +1,17 @@
 import { z } from "zod";
-import { newId } from "../lib/id";
-import { nowIso } from "../lib/time";
 import type { ColorValue } from "../lib/colors";
 import { HexColorSchema } from "../lib/colors";
+import { newId } from "../lib/id";
+import { nowIso } from "../lib/time";
 
 export const ProjectSchema = z.object({
   id: z.string(),
-  name: z.string(),
+  // Limit name length to avoid extremely long titles in UI
+  name: z.string().min(1).max(120),
+  // Description can remain free-form
   description: z.string().optional(),
-  excerpt: z.string().optional(),
+  // Excerpt (short summary) should be limited so cards remain tidy
+  excerpt: z.string().max(240).optional(),
   color: HexColorSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),

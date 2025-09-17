@@ -1,4 +1,10 @@
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -8,8 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Filter, LayoutGrid, List } from "lucide-react";
-import { useState, useRef, useCallback, type ChangeEvent } from "react";
+import { Filter, LayoutGrid, List, Plus } from "lucide-react";
+import { useCallback, useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
 
 type NotesHeaderProps = {
@@ -30,26 +36,29 @@ export function NotesHeader({
   const [isSimpleView, setIsSimpleView] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleFileChange = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
 
-    try {
-      const text = await file.text();
-      // Split by empty lines to separate notes
-      const notes = text.split(/\n\s*\n/).filter((note) => note.trim());
-      onImportNotes(notes);
-      toast.success(`Imported ${notes.length} notes`);
-    } catch (error) {
-      console.error("Error reading file:", error);
-      toast.error("Failed to import notes");
-    } finally {
-      // Reset file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+      try {
+        const text = await file.text();
+        // Split by empty lines to separate notes
+        const notes = text.split(/\n\s*\n/).filter((note) => note.trim());
+        onImportNotes(notes);
+        toast.success(`Imported ${notes.length} notes`);
+      } catch (error) {
+        console.error("Error reading file:", error);
+        toast.error("Failed to import notes");
+      } finally {
+        // Reset file input
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
       }
-    }
-  }, [onImportNotes]);
+    },
+    [onImportNotes]
+  );
 
   const handleViewToggle = useCallback(() => {
     const newViewState = !isSimpleView;
@@ -73,25 +82,29 @@ export function NotesHeader({
         <h1 className="text-2xl font-bold">My Notes</h1>
 
         <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-          <Button size="sm" variant="outline" onClick={onAddNote}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Note
-          </Button>
-
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              accept=".txt"
-              className="hidden"
-            />
-            Import from TXT
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline">
+                <Plus className="mr-2 h-4 w-4" />
+                Add
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onSelect={onAddNote}>
+                Create Note
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
+                Import from TXT
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept=".txt"
+            className="hidden"
+          />
 
           <Button
             size="sm"

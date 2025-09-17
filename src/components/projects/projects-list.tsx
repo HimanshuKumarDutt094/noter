@@ -1,5 +1,5 @@
 import type { Project } from "@/collections/projects";
-import { ProjectCard } from "@/components/projects/ProjectCard";
+import { ProjectCard } from "@/components/projects/project-card";
 
 export type ProjectsListProps = {
   projects: readonly Project[];
@@ -8,7 +8,12 @@ export type ProjectsListProps = {
   noteCounts?: Readonly<Record<string, number>>;
 };
 
-export function ProjectsList({ projects, getNoteCount, onSelectProject, noteCounts }: ProjectsListProps) {
+export function ProjectsList({
+  projects,
+  getNoteCount,
+  onSelectProject,
+  noteCounts,
+}: ProjectsListProps) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       {projects.map((p) => (
@@ -17,8 +22,8 @@ export function ProjectsList({ projects, getNoteCount, onSelectProject, noteCoun
           project={p}
           noteCount={noteCounts?.[p.id] ?? getNoteCount(p.id)}
           onClick={onSelectProject}
-        />)
-      )}
+        />
+      ))}
     </div>
   );
 }

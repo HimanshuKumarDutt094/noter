@@ -1,20 +1,21 @@
-import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import type { SubmitHandler } from "react-hook-form";
-import { Tag } from "lucide-react";
-import { cn } from "@/lib/utils";
 import {
-  type Note,
   type CreateNoteInput,
+  type Note,
   type UpdateNoteInput,
 } from "@/collections/notes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { TagSelector } from "./TagSelector";
+import { cn } from "@/lib/utils";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { Tag } from "lucide-react";
+import { useEffect, useState } from "react";
+import type { SubmitHandler } from "react-hook-form";
+import { useForm } from "react-hook-form";
+import { TagSelector } from "./tag-selector";
 // legacy single category selector removed in favor of multi-select
-import { toast } from "sonner";
+import type { Category } from "@/collections/categories";
+import type { Project } from "@/collections/projects";
 import {
   Form,
   FormControl,
@@ -23,19 +24,21 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { z } from "zod/v4";
+import { MultiSelect } from "@/components/ui/multi-select";
+import { COLORS, HexColorSchema, type ColorValue } from "@/lib/colors";
+import { baseCategoriesCollection, baseProjectsCollection } from "@/lib/db";
 import { useLiveQuery } from "@tanstack/react-db";
-import { categoriesCollection, projectsCollection } from "@/lib/db";
-import { Checkbox } from "@/components/ui/checkbox";
-import { HexColorSchema, COLORS, type ColorValue } from "@/lib/colors";
-import type { Project } from "@/collections/projects";
-import type { Category } from "@/collections/categories";
+import { toast } from "sonner";
+import { z } from "zod/v4";
 
 // Using centralized HexColorSchema from src/lib/colors.ts
 
 // Dedicated form schema to match the editor fields exactly
 const NoteFormSchema = z.object({
-  title: z.string().min(1, "Title is required"),
+  title: z
+    .string()
+    .min(1, "Title is required")
+    .max(120, "Title must be 120 characters or less"),
   content: z.string().min(1).nonempty(),
   tagIds: z.array(z.string()),
   projectIds: z.array(z.string()),
@@ -89,12 +92,16 @@ export function NoteEditor({
   const { control, handleSubmit, setValue, reset } = form;
 
   // Live data for projects and categories
-  const { data: allProjects = [] } = useLiveQuery(projectsCollection) as {
-    data: Project[];
-  };
-  const { data: allCategories = [] } = useLiveQuery(categoriesCollection) as {
-    data: Category[];
-  };
+  const { data: allProjects = [] } = useLiveQuery((q) =>
+    q
+      .from({ project: baseProjectsCollection })
+      .orderBy(({ project }) => project.name, "asc")
+  ) as unknown as { data: Project[] };
+  const { data: allCategories = [] } = useLiveQuery((q) =>
+    q
+      .from({ category: baseCategoriesCollection })
+      .orderBy(({ category }) => category.name, "asc")
+  ) as unknown as { data: Category[] };
 
   // Keep form in sync when editing an existing note changes
   useEffect(() => {
@@ -121,19 +128,7 @@ export function NoteEditor({
     setValue("tagIds", Array.from(tags), { shouldValidate: true });
   };
 
-  const toggleArrayValue = (
-    fieldName: "projectIds" | "categoryIds",
-    id: string,
-    checked: boolean
-  ) => {
-    const current = (form.getValues(fieldName) || []) as string[];
-    const next = checked
-      ? current.includes(id)
-        ? current
-        : [...current, id]
-      : current.filter((x) => x !== id);
-    setValue(fieldName, next, { shouldValidate: true });
-  };
+  // toggleArrayValue removed; MultiSelect handles array updates via setValue
 
   const onSubmit: SubmitHandler<NoteFormValues> = async (formData) => {
     try {
@@ -206,7 +201,7 @@ export function NoteEditor({
             )}
           />
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 items-end md:grid-cols-2 lg:grid-cols-3 gap-6">
             <FormField
               control={control}
               name="tagIds"
@@ -235,34 +230,28 @@ export function NoteEditor({
                   <FormLabel className="text-sm font-medium text-muted-foreground">
                     Projects
                   </FormLabel>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {allProjects.map((p) => {
-                      const checked = (field.value || []).includes(p.id);
-                      return (
-                        <label
-                          key={p.id}
-                          className="flex items-center gap-2 text-sm border rounded-md px-2 py-1 cursor-pointer"
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onCheckedChange={(val) =>
-                              toggleArrayValue("projectIds", p.id, val === true)
-                            }
-                          />
-                          {p.color && (
+                  <FormControl>
+                    <div>
+                      <MultiSelect
+                        options={allProjects.map((p) => ({
+                          value: p.id,
+                          label: p.name,
+                          left: p.color ? (
                             <span
                               className="inline-block h-3 w-3 rounded-full border"
                               style={{ backgroundColor: p.color }}
                               aria-hidden
                             />
-                          )}
-                          <span className="truncate" title={p.name}>
-                            {p.name}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
+                          ) : undefined,
+                        }))}
+                        value={field.value || []}
+                        onChange={(v) =>
+                          setValue("projectIds", v, { shouldValidate: true })
+                        }
+                        placeholder="Select projects"
+                      />
+                    </div>
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
@@ -276,38 +265,26 @@ export function NoteEditor({
                   <FormLabel className="text-sm font-medium text-muted-foreground">
                     Categories
                   </FormLabel>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {allCategories.map((c) => {
-                      const checked = (field.value || []).includes(c.id);
-                      return (
-                        <label
-                          key={c.id}
-                          className="flex items-center gap-2 text-sm border rounded-md px-2 py-1 cursor-pointer"
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onCheckedChange={(val) =>
-                              toggleArrayValue(
-                                "categoryIds",
-                                c.id,
-                                val === true
-                              )
-                            }
+                  <FormControl>
+                    <MultiSelect
+                      options={allCategories.map((c) => ({
+                        value: c.id,
+                        label: c.name,
+                        left: c.color ? (
+                          <span
+                            className="inline-block h-3 w-3 rounded-full border"
+                            style={{ backgroundColor: c.color }}
+                            aria-hidden
                           />
-                          {c.color && (
-                            <span
-                              className="inline-block h-3 w-3 rounded-full border"
-                              style={{ backgroundColor: c.color }}
-                              aria-hidden
-                            />
-                          )}
-                          <span className="truncate" title={c.name}>
-                            {c.name}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
+                        ) : undefined,
+                      }))}
+                      value={field.value || []}
+                      onChange={(v) =>
+                        setValue("categoryIds", v, { shouldValidate: true })
+                      }
+                      placeholder="Select categories"
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}

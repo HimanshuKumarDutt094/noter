@@ -1,18 +1,34 @@
-import { useEffect, useMemo, useState, useCallback, memo, type CSSProperties } from "react";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, ChevronUp, Star } from "lucide-react";
-import { usePreferences } from "@/hooks/usePreferences";
+import { Button } from "@/components/ui/button";
+import { usePreferences } from "@/hooks/use-preferences";
 import {
   DndContext,
-  type DragEndEvent,
+  DragOverlay,
+  MouseSensor,
   PointerSensor,
+  closestCenter,
   useSensor,
   useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
-import { SortableContext, arrayMove, useSortable } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { motion, AnimatePresence } from "motion/react";
+import { ChevronDown, ChevronUp, Star } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 
 export type TagFilterBarProps = {
   allTags: readonly string[];
@@ -29,6 +45,7 @@ export function TagFilterBar({
   const [expanded, setExpanded] = useState<boolean>(
     prefs?.ui.expandedTags ?? false
   );
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   // Keep local expanded in sync with prefs when they load/change
   useEffect(() => {
@@ -55,31 +72,52 @@ export function TagFilterBar({
   const others = ordered.filter((t) => !favorites.has(t));
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+    useSensor(MouseSensor, {
+      activationConstraint: {
+        distance: 10,
+      },
+    }),
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 10,
+      },
+    })
   );
 
-  const onDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
+  const onDragStart = useCallback((event: DragStartEvent) => {
+    setActiveId(String(event.active.id));
+  }, []);
 
-    const list = [...ordered];
-    const oldIndex = list.indexOf(String(active.id));
-    const newIndex = list.indexOf(String(over.id));
-    if (oldIndex < 0 || newIndex < 0) return;
-    const moved = arrayMove(list, oldIndex, newIndex);
-    void updatePrefs((draft) => {
-      draft.tagOrder = moved;
-    });
-  }, [ordered, updatePrefs]);
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      setActiveId(null);
 
-  const toggleFavorite = useCallback((tag: string) => {
-    const set = new Set(prefs?.favoriteTagIds ?? []);
-    if (set.has(tag)) set.delete(tag);
-    else set.add(tag);
-    void updatePrefs((draft) => {
-      draft.favoriteTagIds = Array.from(set);
-    });
-  }, [prefs?.favoriteTagIds, updatePrefs]);
+      if (!over || active.id === over.id) return;
+
+      const list = [...ordered];
+      const oldIndex = list.indexOf(String(active.id));
+      const newIndex = list.indexOf(String(over.id));
+      if (oldIndex < 0 || newIndex < 0) return;
+      const moved = arrayMove(list, oldIndex, newIndex);
+      void updatePrefs((draft) => {
+        draft.tagOrder = moved;
+      });
+    },
+    [ordered, updatePrefs]
+  );
+
+  const toggleFavorite = useCallback(
+    (tag: string) => {
+      const set = new Set(prefs?.favoriteTagIds ?? []);
+      if (set.has(tag)) set.delete(tag);
+      else set.add(tag);
+      void updatePrefs((draft) => {
+        draft.favoriteTagIds = Array.from(set);
+      });
+    },
+    [prefs?.favoriteTagIds, updatePrefs]
+  );
 
   const toggleExpanded = useCallback(() => {
     const next = !expanded;
@@ -97,31 +135,52 @@ export function TagFilterBar({
       transform,
       transition,
       isDragging,
-    } = useSortable({ id: tag });
+      isSorting,
+    } = useSortable({
+      id: tag,
+      animateLayoutChanges: () => false, // Disable dnd-kit's built-in layout animations
+    });
+
+    // Debug: Check if activeId matches this tag
+    const isBeingDragged = activeId === tag;
+
     const style: CSSProperties = {
       transform: CSS.Transform.toString(transform),
-      transition,
-      cursor: isDragging ? "grabbing" : "grab",
-      opacity: isDragging ? 0.8 : 1,
+      transition: isDragging ? "none" : transition, // No transition while actively dragging
+      opacity: isBeingDragged ? 0 : 1, // Use global activeId to hide the dragged item
+      pointerEvents: isDragging ? "none" : "auto", // Disable interactions while dragging
+      visibility: isBeingDragged ? "hidden" : "visible", // Extra hiding for better UX
     };
+
     return (
       <motion.div
-        layout
+        layout={!isDragging && !isSorting} // Only allow Framer Motion layout when not involved in drag operations
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0.9, opacity: 0 }}
+        transition={{ type: "spring", stiffness: 300, damping: 30 }}
         ref={setNodeRef}
         style={style}
-        {...attributes}
-        {...listeners}
+        className="relative"
       >
         <Badge
           variant={activeTag === tag ? "default" : "secondary"}
-          className="flex items-center gap-1 select-none"
+          className="flex items-center gap-1 select-none cursor-pointer"
           onClick={() => onChangeActive(activeTag === tag ? null : tag)}
           data-id={tag}
         >
+          {/* Drag handle - separate from the badge content */}
+          <span
+            {...attributes}
+            {...listeners}
+            className="cursor-grab active:cursor-grabbing p-1 -m-1 rounded hover:bg-muted/50"
+            aria-label="Drag to reorder"
+          >
+            ⋮⋮
+          </span>
+
           {tag}
+
           <button
             type="button"
             aria-label={favorites.has(tag) ? "Unfavorite" : "Favorite"}
@@ -166,7 +225,12 @@ export function TagFilterBar({
         </Button>
       </div>
 
-      <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+      >
         <div className="flex flex-wrap gap-2 items-center">
           <Button
             variant={!activeTag ? "default" : "outline"}
@@ -177,7 +241,10 @@ export function TagFilterBar({
             All
           </Button>
 
-          <SortableContext items={ordered}>
+          <SortableContext
+            items={ordered}
+            strategy={horizontalListSortingStrategy}
+          >
             <AnimatePresence initial={false}>
               {leftFavorites.map((tag) => (
                 <SortableItem key={tag} tag={tag} />
@@ -197,6 +264,23 @@ export function TagFilterBar({
             </span>
           ) : null}
         </div>
+
+        <DragOverlay>
+          {activeId ? (
+            <Badge
+              variant={activeTag === activeId ? "default" : "secondary"}
+              className="flex items-center gap-1 select-none opacity-90 shadow-lg cursor-grabbing"
+            >
+              <span className="p-1 -m-1">⋮⋮</span>
+              {activeId}
+              <Star
+                className={
+                  favorites.has(activeId) ? "w-3 h-3 fill-current" : "w-3 h-3"
+                }
+              />
+            </Badge>
+          ) : null}
+        </DragOverlay>
       </DndContext>
     </div>
   );

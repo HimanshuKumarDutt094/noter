@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { X } from 'lucide-react';
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { X } from "lucide-react";
+import { useMemo, useState } from "react";
 
 interface TagSelectorProps {
   selectedTags: readonly string[];
@@ -17,26 +17,24 @@ export function TagSelector({
   selectedTags,
   onTagsChange,
   availableTags,
-  placeholder = 'Add a tag...',
+  placeholder = "Add a tag...",
   onCreateTag,
 }: TagSelectorProps) {
-  const [inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState("");
   // Stabilize arrays to avoid new [] identity each render
   const safeAvailableTags = useMemo(
     () => availableTags ?? EMPTY,
     [availableTags]
   );
-  const safeSelectedTags = useMemo(
-    () => selectedTags ?? EMPTY,
-    [selectedTags]
-  );
+  const safeSelectedTags = useMemo(() => selectedTags ?? EMPTY, [selectedTags]);
 
   const suggestions = useMemo(() => {
     const query = inputValue.trim();
     if (!query) return EMPTY;
     const q = query.toLowerCase();
-    return safeAvailableTags
-      .filter((tag) => tag.toLowerCase().includes(q) && !safeSelectedTags.includes(tag));
+    return safeAvailableTags.filter(
+      (tag) => tag.toLowerCase().includes(q) && !safeSelectedTags.includes(tag)
+    );
   }, [inputValue, safeAvailableTags, safeSelectedTags]);
 
   const handleAddTag = (tag: string) => {
@@ -46,15 +44,15 @@ export function TagSelector({
         onCreateTag?.(tag);
       }
     }
-    setInputValue('');
+    setInputValue("");
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
-    onTagsChange(safeSelectedTags.filter(tag => tag !== tagToRemove));
+    onTagsChange(safeSelectedTags.filter((tag) => tag !== tagToRemove));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (['Enter', 'Tab', ','].includes(e.key)) {
+    if (["Enter", "Tab", ","].includes(e.key)) {
       e.preventDefault();
       const tag = inputValue.trim();
       if (tag) {
@@ -65,20 +63,28 @@ export function TagSelector({
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {safeSelectedTags.map(tag => (
-          <Badge key={tag} variant="secondary" className="flex items-center gap-1">
-            {tag}
-            <button
-              type="button"
-              onClick={() => handleRemoveTag(tag)}
-              className="ml-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 p-0.5"
-              aria-label={`Remove ${tag} tag`}
+      <div className="max-h-24 overflow-auto">
+        {" "}
+        {/* fixed-height tag list with scroll */}
+        <div className="flex flex-wrap gap-2">
+          {safeSelectedTags.map((tag) => (
+            <Badge
+              key={tag}
+              variant="secondary"
+              className="flex items-center gap-1"
             >
-              <X size={14} />
-            </button>
-          </Badge>
-        ))}
+              {tag}
+              <button
+                type="button"
+                onClick={() => handleRemoveTag(tag)}
+                className="ml-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 p-0.5"
+                aria-label={`Remove ${tag} tag`}
+              >
+                <X size={14} />
+              </button>
+            </Badge>
+          ))}
+        </div>
       </div>
       <div className="relative">
         <Input

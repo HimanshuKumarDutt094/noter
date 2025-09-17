@@ -1,12 +1,12 @@
-import { useNavigate } from "react-router";
+import type { CreateNoteInput } from "@/collections/notes";
+import { NoteImporter } from "@/components/notes/note-importer";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { toast } from "sonner";
 import { baseNotesCollection } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { nowIso } from "@/lib/time";
-import { NoteImporter } from "@/components/notes/NoteImporter";
-import type { CreateNoteInput } from "@/collections/notes";
-import { routes } from "@/routes/routePaths";
+import { routes } from "@/routes/route-paths";
+import { useNavigate } from "react-router";
+import { toast } from "sonner";
 
 export function ImportView() {
   const navigate = useNavigate();
@@ -38,7 +38,7 @@ export function ImportView() {
       toast.success(`Successfully imported ${notes.length} notes!`, {
         id: toastId,
       });
-      navigate(routes.notes.index());
+      navigate(routes.home());
     } catch (error) {
       console.error("Error importing notes:", error);
       toast.error("Failed to import some notes. Please try again.", {

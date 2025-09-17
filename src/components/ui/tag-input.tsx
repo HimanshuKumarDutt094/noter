@@ -1,6 +1,6 @@
-import * as React from "react";
-import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { X } from "lucide-react";
+import * as React from "react";
 
 interface TagInputProps extends React.HTMLAttributes<HTMLDivElement> {
   tags: string[];
@@ -56,7 +56,7 @@ export function TagInput({
   return (
     <div
       className={cn(
-        "flex flex-wrap gap-2 p-2 border rounded-md min-h-[40px]",
+        "flex items-center gap-2 p-2 border rounded-md h-10 overflow-x-auto whitespace-nowrap",
         "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
         className
       )}
@@ -67,18 +67,21 @@ export function TagInput({
         <div
           key={tag}
           className={cn(
-            "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium",
-            "bg-primary/10 text-primary hover:bg-primary/20"
+            "flex-none inline-flex items-center px-2.5 h-6 rounded-full text-xs font-medium",
+            "bg-primary/10 text-primary hover:bg-primary/20",
+            "whitespace-nowrap overflow-hidden"
           )}
         >
-          {tag}
+          <span title={tag} className="truncate max-w-[10rem] block px-1">
+            {tag}
+          </span>
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
               removeTag(tag);
             }}
-            className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-primary/30"
+            className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-primary/30"
           >
             <X className="w-3 h-3" />
           </button>
@@ -95,7 +98,7 @@ export function TagInput({
           onBlur={addTag}
           placeholder={tags.length === 0 ? placeholder : ""}
           className={cn(
-            "flex-1 min-w-[100px] bg-transparent outline-none text-sm",
+            "flex-none min-w-[140px] bg-transparent outline-none text-sm self-center",
             "placeholder:text-muted-foreground",
             inputClassName
           )}

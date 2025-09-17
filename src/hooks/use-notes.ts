@@ -1,24 +1,40 @@
-import { useCallback } from "react";
-import { useLiveQuery } from "@tanstack/react-db";
-import { notesCollection, pinnedNotes, baseNotesCollection } from "@/lib/db";
 import type { Note } from "@/lib/db";
+import { baseNotesCollection } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { nowIso } from "@/lib/time";
+import { eq, useLiveQuery } from "@tanstack/react-db";
+import { useCallback } from "react";
 
 export function useNotes(projectId?: string) {
-  const notesQuery = useLiveQuery(notesCollection);
-  const pinnedQuery = useLiveQuery(pinnedNotes);
+  const notesQuery = useLiveQuery((q) =>
+    q
+      .from({ note: baseNotesCollection })
+      .orderBy(({ note }) => note.updatedAt, "desc")
+  ) as unknown as { data: Note[]; isLoading: boolean };
+
+  const pinnedQuery = useLiveQuery((q) =>
+    q
+      .from({ note: baseNotesCollection })
+      .where(({ note }) => eq(note.isPinned, true))
+      .orderBy(({ note }) => note.updatedAt, "desc")
+  ) as unknown as { data: Note[] };
 
   const { data: allNotes = [], isLoading } = notesQuery;
   const { data: allPinned = [] } = pinnedQuery;
 
   // Filter notes by projectId if provided (arrays-only post-migration)
   const notes = projectId
-    ? allNotes.filter((note) => Array.isArray(note.projectIds) && note.projectIds.includes(projectId))
+    ? allNotes.filter(
+        (note) =>
+          Array.isArray(note.projectIds) && note.projectIds.includes(projectId)
+      )
     : allNotes;
 
   const pinned = projectId
-    ? allPinned.filter((note) => Array.isArray(note.projectIds) && note.projectIds.includes(projectId))
+    ? allPinned.filter(
+        (note) =>
+          Array.isArray(note.projectIds) && note.projectIds.includes(projectId)
+      )
     : allPinned;
 
   const createNote = useCallback(

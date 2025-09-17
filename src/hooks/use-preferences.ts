@@ -1,17 +1,18 @@
-import { useEffect, useCallback } from "react";
-import { basePreferencesCollection } from "@/lib/db";
 import {
   DEFAULT_PREFERENCES_ID,
   type Preferences,
   createDefaultPreferences,
 } from "@/collections/preferences";
+import { basePreferencesCollection } from "@/lib/db";
 import { nowIso } from "@/lib/time";
 import { useLiveQuery } from "@tanstack/react-db";
-import { preferencesCollection } from "@/lib/db";
+import { useCallback, useEffect } from "react";
 
 export function usePreferences() {
   // Live query for preferences (single-row collection)
-  const { data = [], isLoading } = useLiveQuery(preferencesCollection);
+  const { data = [], isLoading } = useLiveQuery((q) =>
+    q.from({ preference: basePreferencesCollection })
+  ) as unknown as { data: Preferences[]; isLoading: boolean };
 
   const prefs: Preferences | null = data[0] ?? null;
 

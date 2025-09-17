@@ -1,26 +1,51 @@
-import { useState, useMemo } from "react";
-import { useLiveQuery } from "@tanstack/react-db";
-import { projectsCollection, activeNotesCollection } from "@/lib/db";
-import type { Project } from "@/collections/projects";
-import type { CreateProjectInput } from "@/collections/projects";
 import type { Note } from "@/collections/notes";
-import { Input } from "@/components/ui/input";
-import { filterNotes } from "@/lib/filters";
+import type { CreateProjectInput, Project } from "@/collections/projects";
+import { ProjectDialog } from "@/components/projects/project-dialog";
+import { ProjectsList } from "@/components/projects/projects-list";
 import { Button } from "@/components/ui/button";
-import { useProjects } from "@/hooks/useProjects";
-import { ProjectsList } from "@/components/projects/ProjectsList";
-import { ProjectDialog } from "@/components/projects/ProjectDialog";
+import { Input } from "@/components/ui/input";
+import { useProjects } from "@/hooks/use-projects";
+import { baseNotesCollection, baseProjectsCollection } from "@/lib/db";
+import { filterNotes } from "@/lib/filters";
+import { routes } from "@/routes/route-paths";
+import { eq, useLiveQuery } from "@tanstack/react-db";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { routes } from "@/routes/routePaths";
 
 export function ProjectsPage() {
   const navigate = useNavigate();
-  const { data: projects = [] } = useLiveQuery(projectsCollection) as {
-    data: Project[];
-  };
-  const { data: allNotes = [] } = useLiveQuery(activeNotesCollection) as {
-    data: Note[];
-  };
+  const PAGE_SIZE = 50;
+  const [limit, setLimit] = useState(PAGE_SIZE);
+
+  const { data: projects = [] } = useLiveQuery((q) =>
+    q
+      .from({ project: baseProjectsCollection })
+      .orderBy(({ project }) => project.name, "asc")
+      .limit(limit)
+  ) as unknown as { data: Project[] };
+
+  const { data: allNotes = [] } = useLiveQuery((q) =>
+    q
+      .from({ note: baseNotesCollection })
+      .where(({ note }) => eq(note.isArchived, false))
+      .orderBy(({ note }) => note.updatedAt, "desc")
+  ) as unknown as { data: Note[] };
+
+  // Infinite scroll sentinel for projects list
+  const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!sentinel) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) setLimit((l) => l + PAGE_SIZE);
+        });
+      },
+      { root: null, rootMargin: "200px", threshold: 0.1 }
+    );
+    obs.observe(sentinel);
+    return () => obs.disconnect();
+  }, [sentinel]);
   const { createProject } = useProjects();
 
   const [search, setSearch] = useState("");
@@ -42,7 +67,13 @@ export function ProjectsPage() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <div className={hasNotes ? "lg:col-span-12 xl:col-span-12 space-y-4" : "lg:col-span-5 xl:col-span-4 space-y-4"}>
+      <div
+        className={
+          hasNotes
+            ? "lg:col-span-12 xl:col-span-12 space-y-4"
+            : "lg:col-span-5 xl:col-span-4 space-y-4"
+        }
+      >
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-semibold">Projects</h2>
           <Button size="sm" onClick={() => setDialogOpen(true)}>
@@ -62,6 +93,7 @@ export function ProjectsPage() {
           }
           onSelectProject={(id) => navigate(routes.projects.view(id))}
         />
+        <div ref={setSentinel} />
         <ProjectDialog
           open={dialogOpen}
           onOpenChange={setDialogOpen}

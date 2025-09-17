@@ -1,7 +1,7 @@
-import { useMemo } from "react";
 import type { Note } from "@/collections/notes";
+import { NoteList } from "@/components/notes/note-list";
 import { filterNotes, type NoteFilter } from "@/lib/filters";
-import { NoteList } from "@/components/notes/NoteList";
+import { useMemo } from "react";
 
 export type ProjectNotesPanelProps = {
   allNotes: readonly Note[];
@@ -11,7 +11,9 @@ export type ProjectNotesPanelProps = {
   onDeleteNote: (id: string) => void;
   onTogglePin: (id: string) => void;
   onArchiveNote: (id: string) => void;
-  onImportNotes: (notes: ReadonlyArray<Omit<Note, "id" | "createdAt" | "updatedAt">>) => void;
+  onImportNotes: (
+    notes: ReadonlyArray<Omit<Note, "id" | "createdAt" | "updatedAt">>
+  ) => void;
 };
 
 export function ProjectNotesPanel({
@@ -24,7 +26,10 @@ export function ProjectNotesPanel({
   onArchiveNote,
   onImportNotes,
 }: ProjectNotesPanelProps) {
-  const notes = useMemo(() => filterNotes(allNotes, filter), [allNotes, filter]);
+  const notes = useMemo(
+    () => filterNotes(allNotes, filter),
+    [allNotes, filter]
+  );
 
   return (
     <div className="space-y-4">

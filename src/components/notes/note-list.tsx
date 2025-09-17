@@ -1,9 +1,13 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import type { Note } from "@/collections/notes";
-import { NoteCard } from "./NoteCard";
+import { TagFilterBar } from "@/components/notes/tag-filter-bar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -11,27 +15,32 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, Grid2X2, List, Plus, Download, Upload } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { exportNotes, importNotes } from "@/lib/import-export";
-import { TagFilterBar } from "@/components/notes/TagFilterBar";
-import { toast } from "sonner";
+import { baseCategoriesCollection, baseProjectsCollection } from "@/lib/db";
 import { filterNotes } from "@/lib/filters";
+import { exportNotes, importNotes } from "@/lib/import-export";
 import { sortNotes } from "@/lib/sorting";
+import { cn } from "@/lib/utils";
+import { useLiveQuery } from "@tanstack/react-db";
+import { Download, Grid2X2, List, Plus, Search, Upload } from "lucide-react";
 import {
-  useQueryState,
-  parseAsString,
   parseAsBoolean,
   parseAsInteger,
+  parseAsString,
   parseAsStringEnum,
+  useQueryState,
 } from "nuqs";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import { NoteCard } from "./note-card";
 
 type ViewMode = "grid" | "list";
 type SortBy = "newest" | "oldest" | "title";
 
 type NoteListProps = {
   notes: Note[];
+  isLoading?: boolean;
   onAddNote: () => void;
   onEditNote: (id: string) => void;
   onDeleteNote: (id: string) => void;
@@ -39,11 +48,14 @@ type NoteListProps = {
   onArchiveNote: (id: string) => void;
   onCloneNote?: (id: string) => void;
   onMoveNote?: (id: string) => void;
-  onImportNotes: (notes: Array<Omit<Note, "id" | "createdAt" | "updatedAt">>) => void;
+  onImportNotes: (
+    notes: Array<Omit<Note, "id" | "createdAt" | "updatedAt">>
+  ) => void;
 };
 
 export function NoteList({
   notes,
+  isLoading = false,
   onAddNote,
   onEditNote,
   onDeleteNote,
@@ -66,6 +78,14 @@ export function NoteList({
     parseAsStringEnum(["newest", "oldest", "title"]).withDefault("newest")
   );
   const [activeTag, setActiveTag] = useQueryState("tag");
+  const [projectFilter, setProjectFilter] = useQueryState(
+    "project",
+    parseAsString.withDefault("__all")
+  );
+  const [categoryFilter, setCategoryFilter] = useQueryState(
+    "category",
+    parseAsString.withDefault("__all")
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [simpleView, setSimpleView] = useQueryState(
     "simple",
@@ -96,28 +116,39 @@ export function NoteList({
     fileInputRef.current?.click();
   }, []);
 
-  const handleFileChange = useCallback(async (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  const handleFileChange = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
 
-    try {
-      const importedNotes = await importNotes(file);
-      onImportNotes(importedNotes);
-      toast.success(`Successfully imported ${importedNotes.length} notes`);
-    } catch (error) {
-      console.error("Import failed:", error);
-      toast.error(
-        error instanceof Error ? error.message : "Failed to import notes"
-      );
-    } finally {
-      // Reset the input value to allow re-importing the same file
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+      try {
+        const importedNotes = await importNotes(file);
+        // If we're inside a project, attach the projectId to each imported note
+        const pid = new URLSearchParams(window.location.search).get(
+          "projectId"
+        );
+        const notesWithProject = pid
+          ? importedNotes.map((n) => ({
+              ...n,
+              projectIds: [...(n.projectIds || []), pid],
+            }))
+          : importedNotes;
+        onImportNotes(notesWithProject);
+        toast.success(`Successfully imported ${importedNotes.length} notes`);
+      } catch (error) {
+        console.error("Import failed:", error);
+        toast.error(
+          error instanceof Error ? error.message : "Failed to import notes"
+        );
+      } finally {
+        // Reset the input value to allow re-importing the same file
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
       }
-    }
-  }, [onImportNotes]);
+    },
+    [onImportNotes]
+  );
 
   // Get all unique tags from notes
   const allTags = useMemo(() => {
@@ -128,15 +159,40 @@ export function NoteList({
     return Array.from(tags);
   }, [notes]);
 
+  // Load all projects and categories for filters
+  const { data: allProjects = [] } = useLiveQuery((q) =>
+    q
+      .from({ project: baseProjectsCollection })
+      .orderBy(({ project }) => project.name, "asc")
+  ) as unknown as { data: Array<{ id: string; name?: string }> };
+  const { data: allCategories = [] } = useLiveQuery((q) =>
+    q
+      .from({ category: baseCategoriesCollection })
+      .orderBy(({ category }) => category.name, "asc")
+  ) as unknown as { data: Array<{ id: string; name?: string }> };
+
+  const projectOptions = useMemo(
+    () => allProjects.map((p) => ({ value: p.id, label: p.name ?? p.id })),
+    [allProjects]
+  );
+
+  const categoryOptions = useMemo(
+    () => allCategories.map((c) => ({ value: c.id, label: c.name ?? c.id })),
+    [allCategories]
+  );
+
   // Filter and sort notes (shared filters utility)
   const filteredNotes = useMemo(() => {
     const result = filterNotes(notes, {
       text: searchQuery,
       tagIds: activeTag ? [activeTag] : [],
-      // categoryIds and projectIds can be wired from parent/scoped contexts later
+      categoryIds:
+        categoryFilter && categoryFilter !== "__all" ? [categoryFilter] : [],
+      projectIds:
+        projectFilter && projectFilter !== "__all" ? [projectFilter] : [],
     });
     return sortNotes(result, sortBy);
-  }, [notes, searchQuery, sortBy, activeTag]);
+  }, [notes, searchQuery, sortBy, activeTag, projectFilter, categoryFilter]);
 
   const pinnedNotes = filteredNotes.filter((note) => note.isPinned);
   const otherNotes = filteredNotes.filter((note) => !note.isPinned);
@@ -152,10 +208,26 @@ export function NoteList({
               <span className="text-sm text-muted-foreground">Simple view</span>
               <Switch checked={simpleView} onCheckedChange={setSimpleView} />
             </div>
-            <Button size="sm" variant="outline" onClick={onAddNote} className="flex items-center gap-2">
-              <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">New Note</span>
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex items-center gap-2"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span className="hidden sm:inline">New</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem onSelect={onAddNote}>
+                  Create Note
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={handleImportClick}>
+                  Import Notes
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Tabs
               value={viewMode}
               onValueChange={(value) => setViewMode(value as ViewMode)}
@@ -198,6 +270,43 @@ export function NoteList({
               <SelectItem value="title">Title (A-Z)</SelectItem>
             </SelectContent>
           </Select>
+          <Select
+            value={projectFilter}
+            onValueChange={(value: string) => setProjectFilter(value)}
+          >
+            <SelectTrigger className="w-full sm:w-[220px] h-10">
+              <SelectValue placeholder="Filter by project" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all">All projects</SelectItem>
+              {projectOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  <span className="truncate max-w-[14rem] block">
+                    {opt.label}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={categoryFilter}
+            onValueChange={(value: string) => setCategoryFilter(value)}
+          >
+            <SelectTrigger className="w-full sm:w-[200px] h-10">
+              <SelectValue placeholder="Filter by category" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all">All categories</SelectItem>
+              {categoryOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  <span className="truncate max-w-[14rem] block">
+                    {opt.label}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {viewMode === "grid" && (
             <div className="flex items-center gap-2">
               <Switch
@@ -210,7 +319,9 @@ export function NoteList({
                   }
                 }}
               />
-              <span className="text-sm text-muted-foreground">Custom columns</span>
+              <span className="text-sm text-muted-foreground">
+                Custom columns
+              </span>
               {useCustomCols && (
                 <Input
                   type="number"
@@ -254,7 +365,9 @@ export function NoteList({
             )}
             style={
               viewMode === "grid" && useCustomCols
-                ? { gridTemplateColumns: `repeat(${customCols}, minmax(0, 1fr))` }
+                ? {
+                    gridTemplateColumns: `repeat(${customCols}, minmax(0, 1fr))`,
+                  }
                 : undefined
             }
           >
@@ -269,6 +382,7 @@ export function NoteList({
                 onClone={onCloneNote}
                 onMove={onMoveNote}
                 simpleView={simpleView}
+                isRow={viewMode === "list"}
               />
             ))}
           </div>
@@ -292,7 +406,9 @@ export function NoteList({
             )}
             style={
               viewMode === "grid" && useCustomCols
-                ? { gridTemplateColumns: `repeat(${customCols}, minmax(0, 1fr))` }
+                ? {
+                    gridTemplateColumns: `repeat(${customCols}, minmax(0, 1fr))`,
+                  }
                 : undefined
             }
           >
@@ -307,8 +423,25 @@ export function NoteList({
                 onClone={onCloneNote}
                 onMove={onMoveNote}
                 simpleView={simpleView}
+                isRow={viewMode === "list"}
               />
             ))}
+          </div>
+        ) : isLoading && notes.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <div className="animate-pulse rounded bg-muted h-6 w-48 mb-4" />
+            <div className="animate-pulse rounded bg-muted h-4 w-64 mb-2" />
+            <div className="animate-pulse rounded bg-muted h-3 w-40 mb-6" />
+            <div className="flex flex-col sm:flex-row items-center gap-3">
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full sm:w-auto"
+                disabled
+              >
+                Loading…
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -322,10 +455,23 @@ export function NoteList({
                 : "Get started by creating a new note"}
             </p>
             <div className="flex flex-col sm:flex-row items-center gap-3">
-              <Button size="sm" variant="outline" onClick={handleImportClick} className="w-full sm:w-auto">
-                <Upload className="h-4 w-4 mr-2" />
-                Import Notes
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                  >
+                    <Upload className="h-4 w-4 mr-2" />
+                    Import Notes
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                  <DropdownMenuItem onSelect={handleImportClick}>
+                    Import from JSON/TXT
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <input
                 type="file"
                 ref={fileInputRef}
@@ -333,11 +479,20 @@ export function NoteList({
                 accept=".json,.txt,text/plain"
                 className="hidden"
               />
-              <Button size="sm" variant="outline" onClick={handleExport} className="w-full sm:w-auto">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExport}
+                className="w-full sm:w-auto"
+              >
                 <Download className="h-4 w-4 mr-2" />
                 Export Notes
               </Button>
-              <Button size="sm" onClick={onAddNote} className="w-full sm:w-auto">
+              <Button
+                size="sm"
+                onClick={onAddNote}
+                className="w-full sm:w-auto"
+              >
                 <Plus className="h-4 w-4 mr-2" />
                 Create Note
               </Button>

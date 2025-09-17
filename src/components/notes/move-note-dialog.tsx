@@ -1,19 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
-import { useLiveQuery } from "@tanstack/react-db";
+import type { Note } from "@/collections/notes";
+import type { Project } from "@/collections/projects";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { projectsCollection } from "@/lib/db";
-import type { Note } from "@/collections/notes";
+import { baseProjectsCollection } from "@/lib/db";
+import { useLiveQuery } from "@tanstack/react-db";
 import { ArrowRightLeft } from "lucide-react";
-import type { Project } from "@/collections/projects";
+import { useCallback, useEffect, useState } from "react";
 
 export type MoveNotePayload = {
   noteId: string;
@@ -29,10 +29,17 @@ type MoveNoteDialogProps = {
   onMove: (payload: MoveNotePayload) => void;
 };
 
-export function MoveNoteDialog({ open, onOpenChange, note, onMove }: MoveNoteDialogProps) {
-  const { data: allProjects = [] } = useLiveQuery(projectsCollection) as {
-    data: Project[];
-  };
+export function MoveNoteDialog({
+  open,
+  onOpenChange,
+  note,
+  onMove,
+}: MoveNoteDialogProps) {
+  const { data: allProjects = [] } = useLiveQuery((q) =>
+    q
+      .from({ project: baseProjectsCollection })
+      .orderBy(({ project }) => project.name, "asc")
+  ) as unknown as { data: Project[] };
 
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [keepCategories, setKeepCategories] = useState(true);
@@ -40,7 +47,9 @@ export function MoveNoteDialog({ open, onOpenChange, note, onMove }: MoveNoteDia
 
   useEffect(() => {
     if (open && note) {
-      setSelectedProjectIds(Array.isArray(note.projectIds) ? note.projectIds : []);
+      setSelectedProjectIds(
+        Array.isArray(note.projectIds) ? note.projectIds : []
+      );
       setKeepCategories(true);
       setKeepTags(true);
     }
@@ -55,17 +64,31 @@ export function MoveNoteDialog({ open, onOpenChange, note, onMove }: MoveNoteDia
       keepTags,
     });
     onOpenChange(false);
-  }, [keepCategories, keepTags, note, onMove, onOpenChange, selectedProjectIds]);
+  }, [
+    keepCategories,
+    keepTags,
+    note,
+    onMove,
+    onOpenChange,
+    selectedProjectIds,
+  ]);
 
   const toggleProject = useCallback((projectId: string, isChecked: boolean) => {
     setSelectedProjectIds((prev) => {
-      if (isChecked) return prev.includes(projectId) ? prev : [...prev, projectId];
+      if (isChecked)
+        return prev.includes(projectId) ? prev : [...prev, projectId];
       return prev.filter((id) => id !== projectId);
     });
   }, []);
 
-  const handleKeepCategoriesChange = useCallback((v: boolean | "indeterminate") => setKeepCategories(v === true), []);
-  const handleKeepTagsChange = useCallback((v: boolean | "indeterminate") => setKeepTags(v === true), []);
+  const handleKeepCategoriesChange = useCallback(
+    (v: boolean | "indeterminate") => setKeepCategories(v === true),
+    []
+  );
+  const handleKeepTagsChange = useCallback(
+    (v: boolean | "indeterminate") => setKeepTags(v === true),
+    []
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -83,15 +106,26 @@ export function MoveNoteDialog({ open, onOpenChange, note, onMove }: MoveNoteDia
               {allProjects.map((p) => {
                 const checked = selectedProjectIds.includes(p.id);
                 return (
-                  <label key={p.id} className="flex items-center gap-2 text-sm border rounded-md px-2 py-1 cursor-pointer">
+                  <label
+                    key={p.id}
+                    className="flex items-center gap-2 text-sm border rounded-md px-2 py-1 cursor-pointer"
+                  >
                     <Checkbox
                       checked={checked}
-                      onCheckedChange={(val) => toggleProject(p.id, val === true)}
+                      onCheckedChange={(val) =>
+                        toggleProject(p.id, val === true)
+                      }
                     />
                     {p.color && (
-                      <span className="inline-block h-3 w-3 rounded-full border" style={{ backgroundColor: p.color }} aria-hidden />
+                      <span
+                        className="inline-block h-3 w-3 rounded-full border"
+                        style={{ backgroundColor: p.color }}
+                        aria-hidden
+                      />
                     )}
-                    <span className="truncate" title={p.name}>{p.name}</span>
+                    <span className="truncate" title={p.name}>
+                      {p.name}
+                    </span>
                   </label>
                 );
               })}
@@ -101,19 +135,29 @@ export function MoveNoteDialog({ open, onOpenChange, note, onMove }: MoveNoteDia
           <div className="grid gap-2">
             <Label>Options</Label>
             <label className="flex items-center gap-2 text-sm">
-              <Checkbox checked={keepCategories} onCheckedChange={handleKeepCategoriesChange} />
+              <Checkbox
+                checked={keepCategories}
+                onCheckedChange={handleKeepCategoriesChange}
+              />
               Keep categories
             </label>
             <label className="flex items-center gap-2 text-sm">
-              <Checkbox checked={keepTags} onCheckedChange={handleKeepTagsChange} />
+              <Checkbox
+                checked={keepTags}
+                onCheckedChange={handleKeepTagsChange}
+              />
               Keep tags
             </label>
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleConfirm} disabled={!selectedProjectIds.length}>Move</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={handleConfirm} disabled={!selectedProjectIds.length}>
+            Move
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

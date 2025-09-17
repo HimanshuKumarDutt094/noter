@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { HexColorSchema } from "../lib/colors";
 import { newId } from "../lib/id";
 import { nowIso } from "../lib/time";
-import { HexColorSchema } from "../lib/colors";
 
 export const NoteSchema = z.object({
   id: z.string(),
-  title: z.string(),
+  // Limit title to avoid extremely long titles
+  title: z.string().min(1).max(120),
   content: z.string(),
   color: HexColorSchema.optional(),
   // Legacy single links (kept for migration/back-compat)

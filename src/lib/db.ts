@@ -1,12 +1,20 @@
-import { createCollection } from "@tanstack/react-db";
-import { liveQueryCollectionOptions } from "@tanstack/react-db";
-import { eq, or, inArray } from "@tanstack/react-db";
+import {
+  CategorySchema,
+  TagSchema,
+  type Category,
+  type Tag,
+} from "@/collections/categories";
 import { NoteSchema, type Note } from "@/collections/notes";
-import { ProjectSchema, type Project } from "@/collections/projects";
-import { CategorySchema, type Category } from "@/collections/categories";
-import { TagSchema, type Tag } from "@/collections/categories";
 import { PreferencesSchema, type Preferences } from "@/collections/preferences";
-import { indexdbCollectionOptions } from "@/db/indexdbCollectionOptions";
+import { ProjectSchema, type Project } from "@/collections/projects";
+import { indexdbCollectionOptions } from "@/db/indexdb-collection-options";
+import {
+  createCollection,
+  eq,
+  inArray,
+  liveQueryCollectionOptions,
+  or,
+} from "@tanstack/react-db";
 
 // Base collection for notes with Electric SQL sync
 const baseNotesCollection = createCollection(
@@ -182,6 +190,54 @@ export const tagsCollection = createCollection(
   })
 );
 
+// Page-based pagination helpers using TanStack DB `limit` + `offset`.
+// These create pre-configured live query collections for a specific page.
+// Usage: const pageQuery = createPagedNotesCollection({ page: 0, limit: 50 });
+// Then use `useLiveQuery(() => pageQuery)` in components.
+export function createPagedNotesCollection({
+  page = 0,
+  limit = 50,
+}: {
+  page?: number;
+  limit?: number;
+}) {
+  const id = `notes-page-${limit}-${page}`;
+
+  return createCollection(
+    liveQueryCollectionOptions({
+      id,
+      query: (q) =>
+        q
+          .from({ note: baseNotesCollection })
+          .orderBy(({ note }) => note.updatedAt, "desc")
+          .limit(limit)
+          .offset(page * limit),
+    })
+  );
+}
+
+export function createPagedProjectsCollection({
+  page = 0,
+  limit = 50,
+}: {
+  page?: number;
+  limit?: number;
+}) {
+  const id = `projects-page-${limit}-${page}`;
+
+  return createCollection(
+    liveQueryCollectionOptions({
+      id,
+      query: (q) =>
+        q
+          .from({ project: baseProjectsCollection })
+          .orderBy(({ project }) => project.name, "asc")
+          .limit(limit)
+          .offset(page * limit),
+    })
+  );
+}
+
 // Helper functions
 export async function getCategoryById(
   id: string
@@ -206,14 +262,14 @@ export const db = {
 
 // Export base collections for direct access if needed
 export {
-  baseNotesCollection,
-  baseProjectsCollection,
   baseCategoriesCollection,
-  baseTagsCollection,
+  baseNotesCollection,
   basePreferencesCollection,
+  baseProjectsCollection,
+  baseTagsCollection,
 };
 
 // Re-export types for convenience
+export type { Category, Tag } from "@/collections/categories";
 export type { Note } from "@/collections/notes";
 export type { Project } from "@/collections/projects";
-export type { Category, Tag } from "@/collections/categories";

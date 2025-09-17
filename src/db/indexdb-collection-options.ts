@@ -1,12 +1,12 @@
+import { pg as singletonPg } from "@/lib/pglite";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type {
   CollectionConfig,
-  SyncConfig,
-  InsertMutationFnParams,
-  UpdateMutationFnParams,
   DeleteMutationFnParams,
+  InsertMutationFnParams,
+  SyncConfig,
+  UpdateMutationFnParams,
 } from "@tanstack/db";
-import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { pg as singletonPg } from "@/lib/pglite";
 
 // Define the configuration interface for IndexDB collection using PGlite
 interface IndexDBCollectionConfig<TItem extends object>
@@ -40,6 +40,8 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
     const { begin, write, commit, markReady } = params;
     // Track which IDs we've already applied within the current session to avoid duplicate inserts
     const seenIds = new Set<string | number>();
+    // Track IDs written locally to ignore echo notifications from the same client
+    const locallyWrittenIds = new Map<string | number, number>(); // id -> timestamp
 
     const setupNotifications = async () => {
       // Create notification function that handles INSERT/UPDATE/DELETE safely
@@ -49,10 +51,10 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
          DECLARE
            payload TEXT;
          BEGIN
-           IF TG_OP = 'DELETE' THEN
-             payload := json_build_object('op', TG_OP, 'id', OLD.id)::text;
-           ELSIF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
-             payload := json_build_object('op', TG_OP, 'id', NEW.id)::text;
+          IF TG_OP = 'DELETE' THEN
+            payload := json_build_object('op', TG_OP, 'id', OLD.id, 'row', row_to_json(OLD))::text;
+          ELSIF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
+            payload := json_build_object('op', TG_OP, 'id', NEW.id, 'row', row_to_json(NEW))::text;
            ELSE
              payload := json_build_object('op', TG_OP)::text;
            END IF;
@@ -74,6 +76,43 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
     };
 
     // Helper to re-fetch all data and update the collection state
+    // Fetch a single row by id and apply the corresponding write
+    const refetchRow = async (id: string | number) => {
+      try {
+        const res = await db.query<{
+          id: string | number;
+          data: Record<string, unknown>;
+        }>(`SELECT id, data FROM "${config.tableName}" WHERE id = $1`, [
+          String(id),
+        ]);
+
+        begin();
+
+        if (res.rows.length === 0) {
+          // Row missing -> delete locally
+          write({ type: "delete", value: { id } as TItem });
+        } else {
+          const row = res.rows[0];
+          const payload: Record<string, unknown> = row.data as Record<
+            string,
+            unknown
+          >;
+          const item = { id: row.id, ...payload } as TItem;
+
+          const opType = seenIds.has(row.id) ? "update" : "insert";
+          write({ type: opType as "insert" | "update", value: item });
+          seenIds.add(row.id);
+        }
+
+        commit();
+      } catch (error) {
+        console.error(
+          `Error refetching row ${String(id)} for table ${config.tableName}:`,
+          error
+        );
+      }
+    };
+
     const refetchAll = async () => {
       try {
         const currentData = await db.query<{
@@ -86,19 +125,24 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
         // Insert/update all items from database
         const currentIds = new Set<string | number>();
         for (const row of currentData.rows) {
-          // Construct item and let TanStack DB schema (if provided) validate/coerce
-          const payload: Record<string, unknown> = row.data as Record<string, unknown>;
-          const item = ({ id: row.id, ...payload }) as TItem;
+          const payload: Record<string, unknown> = row.data as Record<
+            string,
+            unknown
+          >;
+          const item = { id: row.id, ...payload } as TItem;
 
           try {
-            // Use insert for new IDs, update for ones we've already seen to avoid DuplicateKeySyncError
             const opType = seenIds.has(row.id) ? "update" : "insert";
             write({ type: opType as "insert" | "update", value: item });
-            // Mark as seen for subsequent refetch cycles
             seenIds.add(row.id);
             currentIds.add(row.id);
           } catch (e) {
-            console.error(`Write failed for id ${String(row.id)} in table ${config.tableName}:`, e);
+            console.error(
+              `Write failed for id ${String(row.id)} in table ${
+                config.tableName
+              }:`,
+              e
+            );
           }
         }
 
@@ -109,7 +153,6 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
           }
         }
 
-        // Update last seen ids snapshot
         lastSeenIds.clear();
         currentIds.forEach((id) => lastSeenIds.add(id));
 
@@ -135,16 +178,47 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
       isListenerRunning = true;
       notificationHandler = (payload: string) => {
         if (!isListenerRunning) return;
-        if (!initialSyncComplete) {
-          bufferedEvents.push(payload);
-          return;
+        try {
+          const parsed = JSON.parse(payload);
+          const id = parsed.id;
+          // Ignore notifications we recently wrote locally (within 2s)
+          const lastWritten = locallyWrittenIds.get(id);
+          const now = Date.now();
+          if (lastWritten && now - lastWritten < 2000) {
+            // skip echo
+            return;
+          }
+
+          if (!initialSyncComplete) {
+            bufferedEvents.push(payload);
+            return;
+          }
+
+          // If the notification contains row payload, apply it directly
+          if (parsed.row) {
+            begin();
+            if (parsed.op === "DELETE") {
+              write({ type: "delete", value: { id } as TItem });
+            } else {
+              const rowData = parsed.row.data ?? parsed.row;
+              const item = { id, ...rowData } as TItem;
+              const opType = seenIds.has(id) ? "update" : "insert";
+              write({ type: opType as "insert" | "update", value: item });
+              seenIds.add(id);
+            }
+            commit();
+          } else {
+            // Fallback: fetch single row
+            void refetchRow(id).catch((error) =>
+              console.error(
+                `Notification handler error for ${config.tableName}:`,
+                error
+              )
+            );
+          }
+        } catch (err) {
+          console.error("Failed to handle notification payload", err);
         }
-        void refetchAll().catch((error) => {
-          console.error(
-            `Notification handler error for ${config.tableName}:`,
-            error
-          );
-        });
       };
       unsubscribe = await db.listen(notificationChannel, notificationHandler);
 
@@ -190,7 +264,9 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
   };
 
   // Handle insert mutations
-  const onInsert = async ({ transaction }: InsertMutationFnParams<TItem>): Promise<void> => {
+  const onInsert = async ({
+    transaction,
+  }: InsertMutationFnParams<TItem>): Promise<void> => {
     try {
       await db.transaction(async (tx) => {
         for (const mutation of transaction.mutations) {
@@ -209,7 +285,9 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
   };
 
   // Handle update mutations
-  const onUpdate = async ({ transaction }: UpdateMutationFnParams<TItem>): Promise<void> => {
+  const onUpdate = async ({
+    transaction,
+  }: UpdateMutationFnParams<TItem>): Promise<void> => {
     try {
       await db.transaction(async (tx) => {
         for (const mutation of transaction.mutations) {
@@ -229,7 +307,9 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
   };
 
   // Handle delete mutations
-  const onDelete = async ({ transaction }: DeleteMutationFnParams<TItem>): Promise<void> => {
+  const onDelete = async ({
+    transaction,
+  }: DeleteMutationFnParams<TItem>): Promise<void> => {
     try {
       await db.transaction(async (tx) => {
         for (const mutation of transaction.mutations) {

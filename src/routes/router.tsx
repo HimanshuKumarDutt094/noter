@@ -1,14 +1,23 @@
-import { createBrowserRouter, type RouteObject, Navigate } from "react-router";
 import { Suspense, lazy } from "react";
-import { NotFoundPage } from "./pages/NotFoundPage";
-import ErrorPage from "./ErrorPage";
+import { Navigate, createBrowserRouter, type RouteObject } from "react-router";
+import ErrorPage from "./error-page";
+import { NotFoundPage } from "./pages/not-found-page";
 
 // Lazy route elements (wrap named exports into default for React.lazy)
-const HomePage = lazy(() => import("./pages/HomePage").then((m) => ({ default: m.HomePage })));
-const ImportView = lazy(() => import("./pages/ImportView").then((m) => ({ default: m.ImportView })));
-const NotesPage = lazy(() => import("./pages/notes/NotesPage").then((m) => ({ default: m.NotesPage })));
-const NoteView = lazy(() => import("./pages/notes/NoteView").then((m) => ({ default: m.NoteView })));
-const ProjectView = lazy(() => import("./pages/projects/ProjectView").then((m) => ({ default: m.ProjectView })));
+const HomePage = lazy(() =>
+  import("./pages/home-page").then((m) => ({ default: m.HomePage }))
+);
+const ImportView = lazy(() =>
+  import("./pages/import-view").then((m) => ({ default: m.ImportView }))
+);
+const NoteView = lazy(() =>
+  import("./pages/notes/note-view").then((m) => ({ default: m.NoteView }))
+);
+const ProjectView = lazy(() =>
+  import("./pages/projects/project-view").then((m) => ({
+    default: m.ProjectView,
+  }))
+);
 // Note editing is handled via dialog on NotesPage using query params.
 
 /**
@@ -18,7 +27,11 @@ const routeConfig: RouteObject[] = [
   {
     path: "/",
     element: (
-      <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
+      <Suspense
+        fallback={
+          <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+        }
+      >
         <HomePage />
       </Suspense>
     ),
@@ -27,7 +40,11 @@ const routeConfig: RouteObject[] = [
   {
     path: "/import",
     element: (
-      <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
+      <Suspense
+        fallback={
+          <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+        }
+      >
         <ImportView />
       </Suspense>
     ),
@@ -37,18 +54,14 @@ const routeConfig: RouteObject[] = [
     path: "/notes",
     children: [
       {
-        index: true,
-        element: (
-          <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
-            <NotesPage />
-          </Suspense>
-        ),
-        errorElement: <ErrorPage />,
-      },
-      {
+        // Keep direct note view (deep link) available at /notes/:noteId
         path: ":noteId",
         element: (
-          <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
+          <Suspense
+            fallback={
+              <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+            }
+          >
             <NoteView />
           </Suspense>
         ),
@@ -72,7 +85,11 @@ const routeConfig: RouteObject[] = [
       {
         path: ":projectId",
         element: (
-          <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
+          <Suspense
+            fallback={
+              <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+            }
+          >
             <ProjectView />
           </Suspense>
         ),
