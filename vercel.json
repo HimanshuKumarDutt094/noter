@@ -48,18 +48,7 @@
   ],
   "rewrites": [
     {
-      "source": "!(assets|dist|robots.txt|favicon.ico|sw.js)/**",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/(.*)",
-      "has": [
-        {
-          "type": "header",
-          "key": "x-matched-path",
-          "value": ""
-        }
-      ],
+      "source": "(.*)",
       "destination": "/index.html"
     }
   ]
