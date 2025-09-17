@@ -1,6 +1,6 @@
 import { ModeToggle } from "@/components/shared/mode-toggle";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Suspense } from "react";
+// eager render — no Suspense required
 import { useSearchParams } from "react-router";
 
 import { NotesPage } from "./notes/notes-page";
@@ -45,26 +45,10 @@ export function HomePage() {
             <ModeToggle />
           </div>
           <TabsContent value="notes" className="mt-0">
-            <Suspense
-              fallback={
-                <div className="p-4 text-sm text-muted-foreground">
-                  Loading notes…
-                </div>
-              }
-            >
-              <NotesPage />
-            </Suspense>
+            <NotesPage />
           </TabsContent>
           <TabsContent value="projects" className="mt-0">
-            <Suspense
-              fallback={
-                <div className="p-4 text-sm text-muted-foreground">
-                  Loading projects…
-                </div>
-              }
-            >
-              <ProjectsPage />
-            </Suspense>
+            <ProjectsPage />
           </TabsContent>
         </Tabs>
       </div>

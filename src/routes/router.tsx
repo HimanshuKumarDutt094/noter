@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+// Eager routes — no Suspense needed
 import { Navigate, createBrowserRouter, type RouteObject } from "react-router";
 import ErrorPage from "./error-page";
 import { NotFoundPage } from "./pages/not-found-page";
@@ -15,28 +15,12 @@ import { ProjectView } from "./pages/projects/project-view";
 const routeConfig: RouteObject[] = [
   {
     path: "/",
-    element: (
-      <Suspense
-        fallback={
-          <div className="p-4 text-sm text-muted-foreground">Loading…</div>
-        }
-      >
-        <HomePage />
-      </Suspense>
-    ),
+    element: <HomePage />,
     errorElement: <ErrorPage />,
   },
   {
     path: "/import",
-    element: (
-      <Suspense
-        fallback={
-          <div className="p-4 text-sm text-muted-foreground">Loading…</div>
-        }
-      >
-        <ImportView />
-      </Suspense>
-    ),
+    element: <ImportView />,
     errorElement: <ErrorPage />,
   },
   {
@@ -45,15 +29,7 @@ const routeConfig: RouteObject[] = [
       {
         // Keep direct note view (deep link) available at /notes/:noteId
         path: ":noteId",
-        element: (
-          <Suspense
-            fallback={
-              <div className="p-4 text-sm text-muted-foreground">Loading…</div>
-            }
-          >
-            <NoteView />
-          </Suspense>
-        ),
+        element: <NoteView />,
         errorElement: <ErrorPage />,
       },
     ],
@@ -73,15 +49,7 @@ const routeConfig: RouteObject[] = [
       },
       {
         path: ":projectId",
-        element: (
-          <Suspense
-            fallback={
-              <div className="p-4 text-sm text-muted-foreground">Loading…</div>
-            }
-          >
-            <ProjectView />
-          </Suspense>
-        ),
+        element: <ProjectView />,
         errorElement: <ErrorPage />,
       },
     ],
