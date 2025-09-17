@@ -1,23 +1,12 @@
-import { Suspense, lazy } from "react";
+import { Suspense } from "react";
 import { Navigate, createBrowserRouter, type RouteObject } from "react-router";
 import ErrorPage from "./error-page";
 import { NotFoundPage } from "./pages/not-found-page";
 
-// Lazy route elements (wrap named exports into default for React.lazy)
-const HomePage = lazy(() =>
-  import("./pages/home-page").then((m) => ({ default: m.HomePage }))
-);
-const ImportView = lazy(() =>
-  import("./pages/import-view").then((m) => ({ default: m.ImportView }))
-);
-const NoteView = lazy(() =>
-  import("./pages/notes/note-view").then((m) => ({ default: m.NoteView }))
-);
-const ProjectView = lazy(() =>
-  import("./pages/projects/project-view").then((m) => ({
-    default: m.ProjectView,
-  }))
-);
+import { HomePage } from "./pages/home-page";
+import { ImportView } from "./pages/import-view";
+import { NoteView } from "./pages/notes/note-view";
+import { ProjectView } from "./pages/projects/project-view";
 // Note editing is handled via dialog on NotesPage using query params.
 
 /**

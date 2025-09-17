@@ -1,14 +1,10 @@
 import { ModeToggle } from "@/components/shared/mode-toggle";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Suspense, lazy } from "react";
+import { Suspense } from "react";
 import { useSearchParams } from "react-router";
 
-const NotesPage = lazy(() =>
-  import("./notes/notes-page").then((m) => ({ default: m.NotesPage }))
-);
-const ProjectsPage = lazy(() =>
-  import("./projects/projects-page").then((m) => ({ default: m.ProjectsPage }))
-);
+import { NotesPage } from "./notes/notes-page";
+import { ProjectsPage } from "./projects/projects-page";
 
 export function HomePage() {
   const [searchParams, setSearchParams] = useSearchParams();
