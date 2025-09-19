@@ -1,6 +1,11 @@
+import {
+  createDefaultPreferences,
+  type Preferences,
+} from "@/collections/preferences";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { usePreferences } from "@/hooks/use-preferences";
+import { basePreferencesCollection } from "@/lib/db";
+import { nowIso } from "@/lib/time";
 import {
   DndContext,
   DragOverlay,
@@ -19,6 +24,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useLiveQuery } from "@tanstack/react-db";
 import { ChevronDown, ChevronUp, Star } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -41,7 +47,51 @@ export function TagFilterBar({
   activeTag,
   onChangeActive,
 }: TagFilterBarProps) {
-  const { prefs, updatePrefs } = usePreferences();
+  // Live query for preferences (single-row basePreferencesCollection)
+  const { data = [], isLoading } = useLiveQuery((q) =>
+    q.from({ preference: basePreferencesCollection })
+  );
+
+  const prefs: Preferences | null = data[0] ?? null;
+
+  // Ensure a default preferences row exists once data is loaded
+  useEffect(() => {
+    if (isLoading) return;
+    if (!prefs) {
+      (async () => {
+        try {
+          const def = createDefaultPreferences();
+          basePreferencesCollection.insert(def);
+        } catch (e: unknown) {
+          // Swallow insert races; another tab/render may have inserted
+          console.warn(
+            "Failed to insert default preferences (possibly exists)",
+            e
+          );
+        }
+      })();
+    }
+  }, [isLoading, prefs]);
+
+  const updatePrefs = useCallback(
+    async (updater: (draft: Preferences) => void) => {
+      const current = prefs ?? createDefaultPreferences();
+      const updated: Preferences = { ...current };
+      updater(updated);
+      updated.updatedAt = nowIso();
+
+      // Upsert semantics: update if exists, otherwise insert
+      if (prefs) {
+        basePreferencesCollection.update(updated.id, (draft) => {
+          Object.assign(draft, updated);
+        });
+      } else {
+        basePreferencesCollection.insert(updated);
+      }
+    },
+    [prefs]
+  );
+
   const [expanded, setExpanded] = useState<boolean>(
     prefs?.ui.expandedTags ?? false
   );

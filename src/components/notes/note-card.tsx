@@ -23,7 +23,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect } from "react";
 
 type NoteCardProps = {
   note: Note;
@@ -48,10 +48,14 @@ export const NoteCard = memo(function NoteCard({
   onMove,
   isRow = false,
 }: NoteCardProps) {
-  const handleTogglePin = useCallback(
-    () => onTogglePin(note.id),
-    [onTogglePin, note.id]
-  );
+  const handleTogglePin = useCallback(() => {
+    return onTogglePin(note.id);
+  }, [onTogglePin, note.id]);
+  useEffect(() => {
+    return () => {
+      /* no-op cleanup */
+    };
+  }, [note.id]);
   const handleEdit = useCallback(() => onEdit(note.id), [onEdit, note.id]);
   const handleClone = useCallback(() => onClone?.(note.id), [onClone, note.id]);
   const handleMove = useCallback(() => onMove?.(note.id), [onMove, note.id]);
@@ -59,13 +63,19 @@ export const NoteCard = memo(function NoteCard({
     () => onArchive(note.id),
     [onArchive, note.id]
   );
-  const handleDelete = useCallback(
-    () => onDelete(note.id),
-    [onDelete, note.id]
-  );
+  const handleDelete = useCallback(() => {
+    try {
+      console.debug("[note-card] handleDelete click, id=", note.id);
+    } catch (err) {
+      console.error("[note-card] debug log failed", err);
+    }
+    return onDelete(note.id);
+  }, [onDelete, note.id]);
 
   return (
     <motion.div
+      layout
+      layoutId={note.id}
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}

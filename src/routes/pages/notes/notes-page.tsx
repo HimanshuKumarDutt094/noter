@@ -6,66 +6,79 @@ import {
 import { NoteEditor } from "@/components/notes/note-editor";
 import { NoteList } from "@/components/notes/note-list";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { baseNotesCollection } from "@/lib/db";
+import {
+  baseNotesCollection,
+  pinnedNotesCollection,
+  unpinnedNotesCollection,
+} from "@/lib/db";
 import { newId } from "@/lib/id";
 import { nowIso } from "@/lib/time";
-import { eq, useLiveQuery } from "@tanstack/react-db";
-import { useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useLiveQuery } from "@tanstack/react-db";
+import { parseAsString, useQueryState } from "nuqs";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 export function NotesPage() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editingNote, setEditingNote] = useState<Note | null>(null);
-  const [searchQuery] = useState("");
   const [isMoveOpen, setIsMoveOpen] = useState(false);
   const [moveNote, setMoveNote] = useState<Note | null>(null);
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [urlNew, setUrlNew] = useQueryState(
+    "new",
+    parseAsString.withDefault("")
+  );
+  const [urlEdit, setUrlEdit] = useQueryState(
+    "edit",
+    parseAsString.withDefault("")
+  );
+  const [urlProjectId] = useQueryState(
+    "projectId",
+    parseAsString.withDefault("")
+  );
 
-  // Page size for incremental loading
-  const PAGE_SIZE = 50;
-  const [limit, setLimit] = useState(PAGE_SIZE);
+  // Pagination functionality will be added later with collection-specific implementation
+  const sentinel = useRef<HTMLDivElement | null>(null);
 
-  // Use live query to get non-archived notes with an adjustable limit (infinite scroll)
-  const { data: allNotes = [], isLoading } = useLiveQuery((q) =>
-    q
-      .from({ note: baseNotesCollection })
-      .where(({ note }) => eq(note.isArchived, false))
-      .orderBy(({ note }) => note.updatedAt, "desc")
-      .limit(limit)
-  ) as unknown as { data: Note[]; isLoading?: boolean };
-
-  // Sentinel for IntersectionObserver to load more
-  const sentinelRef = useState<HTMLDivElement | null>(null);
-  const [sentinel, setSentinel] = sentinelRef;
+  // Use predefined live collections for consistent data flow
+  // This ensures proper reactivity and avoids timing issues with optimistic updates
+  const {
+    data: allNotes,
+    isLoading,
+    status,
+    isIdle,
+    isCleanedUp,
+  } = useLiveQuery(unpinnedNotesCollection);
 
   useEffect(() => {
-    if (!sentinel) return;
+    console.debug(
+      `[notes-page] useLiveQuery status: isLoading=${isLoading}, isIdle=${isIdle}, isCleanedUp=${isCleanedUp}`
+    );
+    console.debug(`[notes-page] allNotes count: ${allNotes?.length ?? 0}`);
+    console.debug(`[notes-page] full status:`, { status });
+  }, [isLoading, isIdle, isCleanedUp, allNotes, status]);
+
+  // Use the predefined pinnedNotesCollection for consistent pinned state
+  const { data: allPinned } = useLiveQuery(pinnedNotesCollection);
+  useEffect(() => {
+    // TODO: Implement pagination with predefined collections if needed
+    // For now, remove infinite scroll to fix reactivity issues
+    const el = sentinel.current;
+    if (!el) return;
+
+    // Placeholder for future pagination implementation
     const obs = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            setLimit((prev) => prev + PAGE_SIZE);
-          }
-        });
+      () => {
+        // Pagination will be implemented later
       },
       { root: null, rootMargin: "200px", threshold: 0.1 }
     );
 
-    obs.observe(sentinel);
+    obs.observe(el);
     return () => obs.disconnect();
-  }, [sentinel]);
+  }, []);
 
-  // Filter notes based on search query
-  const notes = allNotes.filter(
-    (note) =>
-      note.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      note.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (note.tagIds &&
-        note.tagIds.some((tagId: string) =>
-          tagId.toLowerCase().includes(searchQuery.toLowerCase())
-        ))
-  );
+  // Search/filtering handled directly in useLiveQuery; keep `notes` alias
+  const notes = allNotes;
 
   // Notes are filtered by pinned status in the NoteList component
 
@@ -97,8 +110,8 @@ export function NotesPage() {
               : [],
           tagIds: noteData.tagIds ?? [],
         };
+        baseNotesCollection.insert(newNote);
 
-        await baseNotesCollection.insert(newNote);
         setIsEditorOpen(false);
         toast.success("Note created successfully!");
       } catch (error) {
@@ -111,45 +124,33 @@ export function NotesPage() {
 
   // If navigated with ?new=1, open editor and prefill project from query
   useEffect(() => {
-    const shouldOpen = searchParams.get("new") === "1";
-    if (shouldOpen) {
+    if (urlNew === "1") {
       setEditingNote(null);
       setIsEditorOpen(true);
       // Clear the flag to prevent reopening on re-renders
-      setSearchParams(
-        (prev) => {
-          const sp = new URLSearchParams(prev);
-          sp.delete("new");
-          return sp;
-        },
-        { replace: true }
-      );
+      void setUrlNew("");
     }
-  }, [searchParams, setSearchParams]);
+  }, [urlNew, setUrlNew]);
 
   // If navigated with ?edit=<id>, open editor for that note
   useEffect(() => {
-    const editId = searchParams.get("edit");
-    if (editId) {
-      const found = (allNotes as Note[]).find((n) => n.id === editId) || null;
+    if (urlEdit) {
+      const found = (allNotes as Note[])?.find((n) => n.id === urlEdit) || null;
       setEditingNote(found);
       setIsEditorOpen(true);
       // Clear the flag to prevent reopening on re-renders
-      setSearchParams(
-        (prev) => {
-          const sp = new URLSearchParams(prev);
-          sp.delete("edit");
-          return sp;
-        },
-        { replace: true }
-      );
+      void setUrlEdit("");
     }
-  }, [searchParams, setSearchParams, allNotes]);
+  }, [urlEdit, setUrlEdit, allNotes]);
 
   // Update an existing note
   const handleUpdateNote = useCallback(async (note: Note) => {
     try {
-      await baseNotesCollection.update(note.id, (draft) => {
+      const updater = (id: string, cb: (draft: Note) => void) => {
+        baseNotesCollection.update(id, cb);
+      };
+
+      updater(note.id, (draft) => {
         Object.assign(draft, {
           ...note,
           updatedAt: nowIso(),
@@ -182,7 +183,8 @@ export function NotesPage() {
   // Delete a note
   const handleDeleteNote = useCallback(async (id: string) => {
     try {
-      await baseNotesCollection.delete(id);
+      baseNotesCollection.delete(id);
+
       toast.success("Note moved to trash");
     } catch (error) {
       console.error("Error deleting note:", error);
@@ -193,7 +195,7 @@ export function NotesPage() {
   // Open Move dialog
   const handleOpenMove = useCallback(
     (id: string) => {
-      const n = notes.find((x) => x.id === id) || null;
+      const n = (notes as Note[])?.find((x) => x.id === id) || null;
       setMoveNote(n);
       setIsMoveOpen(!!n);
     },
@@ -209,7 +211,7 @@ export function NotesPage() {
       keepTags,
     }: MoveNotePayload) => {
       try {
-        await baseNotesCollection.update(noteId, (draft) => {
+        baseNotesCollection.update(noteId, (draft) => {
           draft.projectIds = Array.isArray(projectIds) ? projectIds : [];
           if (!keepCategories) draft.categoryIds = [];
           if (!keepTags) draft.tagIds = [];
@@ -231,10 +233,10 @@ export function NotesPage() {
   const handleCloneNote = useCallback(
     async (id: string) => {
       try {
-        const original = notes.find((n) => n.id === id);
+        const original = (notes as Note[])?.find((n) => n.id === id);
         if (!original) return;
         const now = nowIso();
-        await baseNotesCollection.insert({
+        baseNotesCollection.insert({
           ...original,
           id: newId(),
           title: original.title
@@ -252,31 +254,30 @@ export function NotesPage() {
     [notes]
   );
 
-  // Toggle pin status
+  // Toggle pin status — use collection's update mechanism to avoid state staleness
   const handleTogglePin = useCallback(
     async (id: string) => {
       try {
-        const note = notes.find((n) => n.id === id);
-        if (!note) return;
-
-        await baseNotesCollection.update(id, (draft) => {
+        baseNotesCollection.update(id, (draft) => {
+          // Toggle the current state - the draft contains the most current data
           draft.isPinned = !draft.isPinned;
           draft.updatedAt = nowIso();
         });
 
-        toast.success(note.isPinned ? "Note unpinned" : "Note pinned");
+        // Note: Toast message will be generic since we don't know the final state here
+        toast.success("Note updated");
       } catch (error) {
         console.error("Error toggling pin status:", error);
         toast.error("Failed to update note. Please try again.");
       }
     },
-    [notes]
+    [] // Remove dependency on allNotes to avoid stale closures
   );
 
   // Archive a note
   const handleArchiveNote = useCallback(async (id: string) => {
     try {
-      await baseNotesCollection.update(id, (draft) => {
+      baseNotesCollection.update(id, (draft) => {
         draft.isArchived = true;
         draft.updatedAt = nowIso();
       });
@@ -356,7 +357,7 @@ export function NotesPage() {
 
   const handleEditNote = useCallback(
     (id: string) => {
-      const noteToEdit = notes.find((n) => n.id === id);
+      const noteToEdit = (notes as Note[])?.find((n) => n.id === id);
       if (noteToEdit) {
         setEditingNote(noteToEdit);
         setIsEditorOpen(true);
@@ -370,19 +371,17 @@ export function NotesPage() {
       importedNotes: Array<Omit<Note, "id" | "createdAt" | "updatedAt">>
     ) => {
       try {
-        await Promise.all(
-          importedNotes.map((note) =>
-            baseNotesCollection.insert({
-              ...note,
-              id: newId(),
-              createdAt: nowIso(),
-              updatedAt: nowIso(),
-              isArchived: note.isArchived ?? false,
-              isPinned: note.isPinned ?? false,
-              tagIds: note.tagIds ?? [],
-            })
-          )
-        );
+        importedNotes.forEach((note) => {
+          baseNotesCollection.insert({
+            ...note,
+            id: newId(),
+            createdAt: nowIso(),
+            updatedAt: nowIso(),
+            isArchived: note.isArchived ?? false,
+            isPinned: note.isPinned ?? false,
+            tagIds: note.tagIds ?? [],
+          });
+        });
         toast.success(`Successfully imported ${importedNotes.length} notes`);
       } catch (error) {
         console.error("Error importing notes:", error);
@@ -397,7 +396,8 @@ export function NotesPage() {
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
       <NoteList
-        notes={notes}
+        notes={notes as Note[]}
+        pinnedNotes={allPinned as Note[]}
         isLoading={Boolean(isLoading)}
         onAddNote={() => {
           setEditingNote(null);
@@ -413,7 +413,7 @@ export function NotesPage() {
       />
 
       {/* Invisible sentinel element for infinite scroll */}
-      <div ref={setSentinel} />
+      <div ref={sentinel} />
 
       <Dialog open={isEditorOpen} onOpenChange={setIsEditorOpen}>
         <DialogContent className="max-w-4xl max-h-[95vh] overflow-y-auto p-0">
@@ -424,21 +424,11 @@ export function NotesPage() {
               onCancel={() => {
                 setIsEditorOpen(false);
                 setEditingNote(null);
-                // Clear edit/new params if present
-                setSearchParams(
-                  (prev) => {
-                    const sp = new URLSearchParams(prev);
-                    sp.delete("edit");
-                    sp.delete("new");
-                    return sp;
-                  },
-                  { replace: true }
-                );
+                // Clear edit/new params if present (nuqs)
+                void setUrlNew("");
+                void setUrlEdit("");
               }}
-              initialProjectIds={(() => {
-                const pid = searchParams.get("projectId");
-                return pid ? [pid] : [];
-              })()}
+              initialProjectIds={urlProjectId ? [urlProjectId] : []}
             />
           </div>
         </DialogContent>

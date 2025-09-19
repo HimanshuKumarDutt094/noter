@@ -24,7 +24,7 @@ export function ImportView() {
 
       // Process each note with a small delay to avoid UI freeze
       for (const note of notes) {
-        await baseNotesCollection.insert({
+        baseNotesCollection.insert({
           ...note,
           id: newId(),
           createdAt: now,

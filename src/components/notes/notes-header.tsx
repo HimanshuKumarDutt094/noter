@@ -93,7 +93,12 @@ export function NotesHeader({
               <DropdownMenuItem onSelect={onAddNote}>
                 Create Note
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
+              <DropdownMenuItem
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }}
+              >
                 Import from TXT
               </DropdownMenuItem>
             </DropdownMenuContent>

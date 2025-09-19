@@ -117,6 +117,11 @@ export function NoteDialog({
   ]);
 
   const handleDelete = useCallback(() => {
+    try {
+      console.debug("[note-dialog] handleDelete invoked, id=", initialNote?.id);
+    } catch (e) {
+      console.error("[note-dialog] debug failed", e);
+    }
     if (onDelete && initialNote?.id) {
       onDelete(initialNote.id);
     }

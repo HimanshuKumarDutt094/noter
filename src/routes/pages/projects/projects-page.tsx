@@ -1,12 +1,12 @@
-import type { Note } from "@/collections/notes";
-import type { CreateProjectInput, Project } from "@/collections/projects";
+import type { CreateProjectInput } from "@/collections/projects";
 import { ProjectDialog } from "@/components/projects/project-dialog";
 import { ProjectsList } from "@/components/projects/projects-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useProjects } from "@/hooks/use-projects";
 import { baseNotesCollection, baseProjectsCollection } from "@/lib/db";
 import { filterNotes } from "@/lib/filters";
+import { newId } from "@/lib/id";
+import { nowIso } from "@/lib/time";
 import { routes } from "@/routes/route-paths";
 import { eq, useLiveQuery } from "@tanstack/react-db";
 import { useEffect, useMemo, useState } from "react";
@@ -22,14 +22,14 @@ export function ProjectsPage() {
       .from({ project: baseProjectsCollection })
       .orderBy(({ project }) => project.name, "asc")
       .limit(limit)
-  ) as unknown as { data: Project[] };
+  );
 
   const { data: allNotes = [] } = useLiveQuery((q) =>
     q
       .from({ note: baseNotesCollection })
       .where(({ note }) => eq(note.isArchived, false))
       .orderBy(({ note }) => note.updatedAt, "desc")
-  ) as unknown as { data: Note[] };
+  );
 
   // Infinite scroll sentinel for projects list
   const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
@@ -46,8 +46,6 @@ export function ProjectsPage() {
     obs.observe(sentinel);
     return () => obs.disconnect();
   }, [sentinel]);
-  const { createProject } = useProjects();
-
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -98,7 +96,14 @@ export function ProjectsPage() {
           open={dialogOpen}
           onOpenChange={setDialogOpen}
           onSubmit={async (values: CreateProjectInput) => {
-            await createProject(values);
+            const now = nowIso();
+            baseProjectsCollection.insert({
+              ...values,
+              categoryIds: values.categoryIds ? [...values.categoryIds] : [],
+              id: newId(),
+              createdAt: now,
+              updatedAt: now,
+            });
           }}
           title="New Project"
         />

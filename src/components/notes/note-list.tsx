@@ -40,6 +40,7 @@ type SortBy = "newest" | "oldest" | "title";
 
 type NoteListProps = {
   notes: Note[];
+  pinnedNotes?: Note[];
   isLoading?: boolean;
   onAddNote: () => void;
   onEditNote: (id: string) => void;
@@ -55,6 +56,7 @@ type NoteListProps = {
 
 export function NoteList({
   notes,
+  pinnedNotes,
   isLoading = false,
   onAddNote,
   onEditNote,
@@ -85,6 +87,10 @@ export function NoteList({
   const [categoryFilter, setCategoryFilter] = useQueryState(
     "category",
     parseAsString.withDefault("__all")
+  );
+  const [urlProjectId] = useQueryState(
+    "projectId",
+    parseAsString.withDefault("")
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [simpleView, setSimpleView] = useQueryState(
@@ -123,10 +129,12 @@ export function NoteList({
 
       try {
         const importedNotes = await importNotes(file);
-        // If we're inside a project, attach the projectId to each imported note
-        const pid = new URLSearchParams(window.location.search).get(
-          "projectId"
-        );
+        // Determine project id to attach: prefer explicit `projectId` query
+        // (used by project view deep-links), but fall back to the
+        // `project` filter query used by the Notes page UI.
+        const pid =
+          urlProjectId ||
+          (projectFilter && projectFilter !== "__all" ? projectFilter : null);
         const notesWithProject = pid
           ? importedNotes.map((n) => ({
               ...n,
@@ -147,7 +155,7 @@ export function NoteList({
         }
       }
     },
-    [onImportNotes]
+    [onImportNotes, urlProjectId, projectFilter]
   );
 
   // Get all unique tags from notes
@@ -159,25 +167,25 @@ export function NoteList({
     return Array.from(tags);
   }, [notes]);
 
-  // Load all projects and categories for filters
-  const { data: allProjects = [] } = useLiveQuery((q) =>
-    q
-      .from({ project: baseProjectsCollection })
-      .orderBy(({ project }) => project.name, "asc")
-  ) as unknown as { data: Array<{ id: string; name?: string }> };
-  const { data: allCategories = [] } = useLiveQuery((q) =>
-    q
-      .from({ category: baseCategoriesCollection })
-      .orderBy(({ category }) => category.name, "asc")
-  ) as unknown as { data: Array<{ id: string; name?: string }> };
+  // Load all projects and categories for filters using predefined collections
+  const { data: allProjects = [] } = useLiveQuery(baseProjectsCollection);
+  const { data: allCategories = [] } = useLiveQuery(baseCategoriesCollection);
 
   const projectOptions = useMemo(
-    () => allProjects.map((p) => ({ value: p.id, label: p.name ?? p.id })),
+    () =>
+      (allProjects as Array<{ id: string; name?: string }>).map((p) => ({
+        value: p.id,
+        label: p.name ?? p.id,
+      })),
     [allProjects]
   );
 
   const categoryOptions = useMemo(
-    () => allCategories.map((c) => ({ value: c.id, label: c.name ?? c.id })),
+    () =>
+      (allCategories as Array<{ id: string; name?: string }>).map((c) => ({
+        value: c.id,
+        label: c.name ?? c.id,
+      })),
     [allCategories]
   );
 
@@ -194,8 +202,10 @@ export function NoteList({
     return sortNotes(result, sortBy);
   }, [notes, searchQuery, sortBy, activeTag, projectFilter, categoryFilter]);
 
-  const pinnedNotes = filteredNotes.filter((note) => note.isPinned);
-  const otherNotes = filteredNotes.filter((note) => !note.isPinned);
+  // Use pinnedNotes prop directly when provided, as it comes from a dedicated live query
+  // Since notes prop now comes from unpinnedNotesCollection, we don't need to filter out pinned notes
+  const pinned = pinnedNotes || [];
+  const otherNotes = filteredNotes; // These are already unpinned notes
 
   return (
     <div className="space-y-6">
@@ -223,7 +233,12 @@ export function NoteList({
                 <DropdownMenuItem onSelect={onAddNote}>
                   Create Note
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={handleImportClick}>
+                <DropdownMenuItem
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    handleImportClick();
+                  }}
+                >
                   Import Notes
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -351,7 +366,7 @@ export function NoteList({
       )}
 
       {/* Pinned notes section */}
-      {pinnedNotes.length > 0 && (
+      {pinned.length > 0 && (
         <div className="space-y-4">
           <h2 className="text-sm font-medium text-muted-foreground">PINNED</h2>
           <div
@@ -371,7 +386,7 @@ export function NoteList({
                 : undefined
             }
           >
-            {pinnedNotes.map((note) => (
+            {pinned.map((note) => (
               <NoteCard
                 key={note.id}
                 note={note}
@@ -427,7 +442,7 @@ export function NoteList({
               />
             ))}
           </div>
-        ) : isLoading && notes.length === 0 ? (
+        ) : isLoading && notes.length === 0 && pinned.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="animate-pulse rounded bg-muted h-6 w-48 mb-4" />
             <div className="animate-pulse rounded bg-muted h-4 w-64 mb-2" />
@@ -443,7 +458,7 @@ export function NoteList({
               </Button>
             </div>
           </div>
-        ) : (
+        ) : otherNotes.length === 0 && pinned.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="rounded-full bg-muted p-4 mb-4">
               <List className="h-8 w-8 text-muted-foreground" />
@@ -467,7 +482,12 @@ export function NoteList({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
-                  <DropdownMenuItem onSelect={handleImportClick}>
+                  <DropdownMenuItem
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      handleImportClick();
+                    }}
+                  >
                     Import from JSON/TXT
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -498,7 +518,7 @@ export function NoteList({
               </Button>
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

@@ -9,14 +9,21 @@ import type {
 } from "@tanstack/db";
 
 // Define the configuration interface for IndexDB collection using PGlite
-interface IndexDBCollectionConfig<TItem extends object>
-  extends Omit<
-    CollectionConfig<TItem>,
-    "onInsert" | "onUpdate" | "onDelete" | "sync"
-  > {
+interface IndexDBCollectionConfig<TItem extends object> {
+  // Core collection config fields we use
+  id: string;
+  getKey?: (item: TItem) => string | number | undefined;
   dbName?: string; // Optional database name, defaults to 'todoist'
   tableName: string; // Required table name
   schema?: StandardSchemaV1<TItem>; // Optional schema for validation/type inference
+  // Optional codec for parse/serialize to preserve typed fields
+  codec?: {
+    parse?: (raw: unknown) => TItem;
+    serialize?: (item: TItem) => unknown;
+  };
+  rowUpdateMode?: "partial" | "full";
+  // How many rows to process per batch during initial sync
+  syncBatchSize?: number;
 }
 
 export function indexdbCollectionOptions<TItem extends { id: string | number }>(
@@ -35,13 +42,64 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
   const bufferedEvents: string[] = [];
   // Track last seen ids to emit deletes on refetch
   const lastSeenIds = new Set<string | number>();
+  // Track IDs written locally to ignore echo notifications from the same client
+  const locallyWrittenIds = new Map<string | number, number>();
+  // Global seen ids + event target for awaitIds semantics
+  const seenIdsMap = new Map<string | number, number>();
+  const seenEventTarget = new EventTarget();
+
+  const seenIdsMapSet = (id: string | number, ts: number) => {
+    try {
+      seenIdsMap.set(id, ts);
+      seenEventTarget.dispatchEvent(
+        new CustomEvent("seen", { detail: { id } })
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  // Prune locallyWrittenIds to avoid unbounded growth
+  const pruneLocallyWrittenIds = () => {
+    const now = Date.now();
+    const ttl = 60_000; // 60s
+    for (const [k, t] of Array.from(locallyWrittenIds.entries())) {
+      if (now - t > ttl) locallyWrittenIds.delete(k);
+    }
+  };
+
+  const awaitIds = (ids: Array<string | number>, timeoutMs = 10000) => {
+    const missing = ids.filter((id) => !seenIdsMap.has(id));
+    if (missing.length === 0) return Promise.resolve();
+
+    return new Promise<void>((resolve, reject) => {
+      const onSeen = (ev: Event) => {
+        const detail = (ev as CustomEvent).detail as
+          | { id: string | number }
+          | undefined;
+        if (!detail) return;
+        const allSeen = ids.every((id) => seenIdsMap.has(id));
+        if (allSeen) {
+          seenEventTarget.removeEventListener("seen", onSeen as EventListener);
+          clearTimeout(timeout);
+          resolve();
+        }
+      };
+
+      const timeout = setTimeout(() => {
+        seenEventTarget.removeEventListener("seen", onSeen as EventListener);
+        reject(new Error("awaitIds timeout"));
+      }, timeoutMs);
+
+      seenEventTarget.addEventListener("seen", onSeen as EventListener);
+    });
+  };
 
   const sync: SyncConfig<TItem>["sync"] = async (params) => {
     const { begin, write, commit, markReady } = params;
     // Track which IDs we've already applied within the current session to avoid duplicate inserts
     const seenIds = new Set<string | number>();
-    // Track IDs written locally to ignore echo notifications from the same client
-    const locallyWrittenIds = new Map<string | number, number>(); // id -> timestamp
+    // NOTE: use the outer `locallyWrittenIds` map (do NOT shadow it here)
 
     const setupNotifications = async () => {
       // Create notification function that handles INSERT/UPDATE/DELETE safely
@@ -93,15 +151,26 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
           write({ type: "delete", value: { id } as TItem });
         } else {
           const row = res.rows[0];
-          const payload: Record<string, unknown> = row.data as Record<
-            string,
-            unknown
-          >;
-          const item = { id: row.id, ...payload } as TItem;
+          const raw = row.data as unknown;
+          const parsed = config.codec?.parse
+            ? config.codec.parse(raw)
+            : ({ id: row.id, ...(raw as Record<string, unknown>) } as TItem);
+
+          // ensure id present
+          // ensure id present (non-invasive)
+          try {
+            const p = parsed as unknown as Record<string, unknown>;
+            if (p && p.id === undefined) p.id = row.id;
+          } catch {
+            // ignore
+          }
 
           const opType = seenIds.has(row.id) ? "update" : "insert";
-          write({ type: opType as "insert" | "update", value: item });
+          write({ type: opType as "insert" | "update", value: parsed });
           seenIds.add(row.id);
+
+          // mark seen for awaitIds
+          seenIdsMapSet(row.id, Date.now());
         }
 
         commit();
@@ -115,48 +184,71 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
 
     const refetchAll = async () => {
       try {
-        const currentData = await db.query<{
-          id: string | number;
-          data: Record<string, unknown>;
-        }>(`SELECT id, data FROM "${config.tableName}"`);
-
-        begin();
-
-        // Insert/update all items from database
+        const batchSize = config.syncBatchSize ?? 1000;
         const currentIds = new Set<string | number>();
-        for (const row of currentData.rows) {
-          const payload: Record<string, unknown> = row.data as Record<
-            string,
-            unknown
-          >;
-          const item = { id: row.id, ...payload } as TItem;
 
-          try {
-            const opType = seenIds.has(row.id) ? "update" : "insert";
-            write({ type: opType as "insert" | "update", value: item });
-            seenIds.add(row.id);
-            currentIds.add(row.id);
-          } catch (e) {
-            console.error(
-              `Write failed for id ${String(row.id)} in table ${
-                config.tableName
-              }:`,
-              e
-            );
+        let offset = 0;
+        while (true) {
+          const page = await db.query<{
+            id: string | number;
+            data: Record<string, unknown>;
+          }>(
+            `SELECT id, data FROM "${config.tableName}" ORDER BY id LIMIT $1 OFFSET $2`,
+            [batchSize, offset]
+          );
+
+          if (!page.rows.length) break;
+
+          begin();
+          for (const row of page.rows) {
+            const raw = row.data as unknown;
+            const parsed = config.codec?.parse
+              ? config.codec.parse(raw)
+              : ({ id: row.id, ...(raw as Record<string, unknown>) } as TItem);
+
+            try {
+              try {
+                const p = parsed as unknown as Record<string, unknown>;
+                if (p && p.id === undefined) p.id = row.id;
+              } catch {
+                // ignore
+              }
+
+              const opType = seenIds.has(row.id) ? "update" : "insert";
+              write({ type: opType as "insert" | "update", value: parsed });
+              seenIds.add(row.id);
+              currentIds.add(row.id);
+
+              // mark seen globally
+              seenIdsMapSet(row.id, Date.now());
+            } catch (e) {
+              console.error(
+                `Write failed for id ${String(row.id)} in table ${
+                  config.tableName
+                }:`,
+                e
+              );
+            }
           }
+          commit();
+
+          if (page.rows.length < batchSize) break;
+          offset += page.rows.length;
         }
 
         // Emit deletes for rows no longer present
-        for (const id of lastSeenIds) {
-          if (!currentIds.has(id)) {
-            write({ type: "delete", value: { id } as TItem });
+        if (lastSeenIds.size) {
+          begin();
+          for (const id of lastSeenIds) {
+            if (!currentIds.has(id)) {
+              write({ type: "delete", value: { id } as TItem });
+            }
           }
+          commit();
         }
 
         lastSeenIds.clear();
         currentIds.forEach((id) => lastSeenIds.add(id));
-
-        commit();
       } catch (error) {
         console.error(
           `Error refetching data for table ${config.tableName}:`,
@@ -270,12 +362,32 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
     try {
       await db.transaction(async (tx) => {
         for (const mutation of transaction.mutations) {
-          const { id, ...data } = mutation.modified;
+          const item = mutation.modified as TItem;
+          const id =
+            (item as unknown as { id?: string | number }).id ?? mutation.key;
+          const stored = config.codec?.serialize
+            ? config.codec.serialize(item)
+            : (() => {
+                const tmp = { ...(item as unknown as Record<string, unknown>) };
+                delete tmp.id;
+                return tmp;
+              })();
+
           await tx.query(
             `INSERT INTO "${config.tableName}" (id, data) VALUES ($1, $2)
              ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data`,
-            [String(id), JSON.stringify(data)]
+            [String(id), JSON.stringify(stored)]
           );
+
+          // mark as locally written to suppress echo notifications
+          try {
+            locallyWrittenIds.set(id, Date.now());
+            pruneLocallyWrittenIds();
+            // mark seen so awaitIds resolves for local writers
+            seenIdsMapSet(id, Date.now());
+          } catch {
+            // ignore
+          }
         }
       });
     } catch (error) {
@@ -291,13 +403,76 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
     try {
       await db.transaction(async (tx) => {
         for (const mutation of transaction.mutations) {
-          const data = { ...(mutation.modified as Record<string, unknown>) };
-          // Ensure we don't persist id inside the JSON data blob
-          if ("id" in data) delete (data as Record<string, unknown>).id;
-          await tx.query(
-            `UPDATE "${config.tableName}" SET data = $1 WHERE id = $2`,
-            [JSON.stringify(data), String(mutation.key)]
-          );
+          const key = mutation.key;
+          if (config.rowUpdateMode === "partial") {
+            // Merge existing stored row with changes
+            const res = await tx.query<{ data: Record<string, unknown> }>(
+              `SELECT data FROM "${config.tableName}" WHERE id = $1`,
+              [String(key)]
+            );
+            const existingRaw = res.rows[0]?.data as unknown;
+            const existing = existingRaw
+              ? config.codec?.parse
+                ? config.codec.parse(existingRaw)
+                : ({
+                    id: key,
+                    ...(existingRaw as Record<string, unknown>),
+                  } as TItem)
+              : ({} as TItem);
+
+            const next = {
+              ...(existing as unknown as object),
+              ...(mutation.changes as object),
+            } as unknown as TItem;
+            const stored = config.codec?.serialize
+              ? config.codec.serialize(next)
+              : (() => {
+                  const tmp = {
+                    ...(next as unknown as Record<string, unknown>),
+                  };
+                  delete tmp.id;
+                  return tmp;
+                })();
+
+            await tx.query(
+              `UPDATE "${config.tableName}" SET data = $1 WHERE id = $2`,
+              [JSON.stringify(stored), String(key)]
+            );
+
+            try {
+              locallyWrittenIds.set(key, Date.now());
+              pruneLocallyWrittenIds();
+              seenIdsMapSet(key, Date.now());
+            } catch {
+              // ignore
+            }
+          } else {
+            // full update: replace stored row with modified
+            const item = mutation.modified as TItem;
+            const id = (item as unknown as { id?: string | number }).id ?? key;
+            const stored = config.codec?.serialize
+              ? config.codec.serialize(item)
+              : (() => {
+                  const tmp = {
+                    ...(item as unknown as Record<string, unknown>),
+                  };
+                  delete tmp.id;
+                  return tmp;
+                })();
+
+            await tx.query(
+              `UPDATE "${config.tableName}" SET data = $1 WHERE id = $2`,
+              [JSON.stringify(stored), String(id)]
+            );
+
+            try {
+              locallyWrittenIds.set(id, Date.now());
+              pruneLocallyWrittenIds();
+              seenIdsMapSet(id, Date.now());
+            } catch {
+              // ignore
+            }
+          }
         }
       });
     } catch (error) {
@@ -316,6 +491,13 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
           await tx.query(`DELETE FROM "${config.tableName}" WHERE id = $1`, [
             String(mutation.key),
           ]);
+          try {
+            locallyWrittenIds.set(mutation.key, Date.now());
+            pruneLocallyWrittenIds();
+            seenIdsMapSet(mutation.key, Date.now());
+          } catch {
+            // ignore
+          }
         }
       });
     } catch (error) {
@@ -326,11 +508,13 @@ export function indexdbCollectionOptions<TItem extends { id: string | number }>(
 
   return {
     id: config.id,
-    schema: config.schema,
     getKey: config.getKey,
-    sync: { sync, rowUpdateMode: "full" },
+    sync: { sync, rowUpdateMode: config.rowUpdateMode ?? "full" },
     onInsert,
     onUpdate,
     onDelete,
-  };
+    utils: {
+      awaitIds,
+    },
+  } as CollectionConfig<TItem>;
 }

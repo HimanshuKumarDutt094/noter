@@ -4,11 +4,12 @@ import {
   type Category,
   type Tag,
 } from "@/collections/categories";
-import { NoteSchema, type Note } from "@/collections/notes";
-import { PreferencesSchema, type Preferences } from "@/collections/preferences";
-import { ProjectSchema, type Project } from "@/collections/projects";
-import { indexdbCollectionOptions } from "@/db/indexdb-collection-options";
+import { dexieCollectionOptions } from "@/collections/dexie-collection-option";
+import { NoteSchema } from "@/collections/notes";
+import { PreferencesSchema } from "@/collections/preferences";
+import { ProjectSchema } from "@/collections/projects";
 import {
+  and,
   createCollection,
   eq,
   inArray,
@@ -16,26 +17,25 @@ import {
   or,
 } from "@tanstack/react-db";
 
-// Base collection for notes with Electric SQL sync
+// Base collection for notes with Dexie sync
 const baseNotesCollection = createCollection(
-  indexdbCollectionOptions({
+  dexieCollectionOptions({
     id: "notes",
     schema: NoteSchema,
     tableName: "notes",
     dbName: "todoist",
-
-    getKey: (item: Note) => item.id,
+    getKey: (item) => item.id,
   })
 );
 
 // Base collection for user preferences (single-row for now)
 const basePreferencesCollection = createCollection(
-  indexdbCollectionOptions({
+  dexieCollectionOptions({
     id: "preferences",
     schema: PreferencesSchema,
     tableName: "preferences",
     dbName: "todoist",
-    getKey: (item: Preferences) => item.id,
+    getKey: (item) => item.id,
   })
 );
 
@@ -47,14 +47,14 @@ export const preferencesCollection = createCollection(
   })
 );
 
-// Base collection for projects with IndexDB
+// Base collection for projects with Dexie
 const baseProjectsCollection = createCollection(
-  indexdbCollectionOptions({
+  dexieCollectionOptions({
     id: "projects",
     schema: ProjectSchema,
     tableName: "projects",
     dbName: "todoist",
-    getKey: (item: Project) => item.id,
+    getKey: (item) => item.id,
   })
 );
 
@@ -82,6 +82,7 @@ export const projectsCollection = createCollection(
 export const activeNotesCollection = createCollection(
   liveQueryCollectionOptions({
     id: "active-notes-live",
+    startSync: true,
     query: (q) =>
       q
         .from({ note: baseNotesCollection })
@@ -90,9 +91,24 @@ export const activeNotesCollection = createCollection(
   })
 );
 
+export const unpinnedNotesCollection = createCollection(
+  liveQueryCollectionOptions({
+    id: "unpinned-notes-live",
+    startSync: true,
+    query: (q) =>
+      q
+        .from({ note: baseNotesCollection })
+        .where(({ note }) =>
+          and(eq(note.isArchived, false), eq(note.isPinned, false))
+        )
+        .orderBy(({ note }) => note.updatedAt, "desc"),
+  })
+);
+
 export const archivedNotesCollection = createCollection(
   liveQueryCollectionOptions({
     id: "archived-notes-live",
+    startSync: true,
     query: (q) =>
       q
         .from({ note: baseNotesCollection })
@@ -104,6 +120,7 @@ export const archivedNotesCollection = createCollection(
 export const pinnedNotesCollection = createCollection(
   liveQueryCollectionOptions({
     id: "pinned-notes-live",
+    startSync: true,
     query: (q) =>
       q
         .from({ note: baseNotesCollection })
@@ -152,22 +169,22 @@ export const getNotesByProjects = (projectIds: readonly string[]) => {
 
 // Create base collections for categories and tags
 const baseCategoriesCollection = createCollection(
-  indexdbCollectionOptions({
+  dexieCollectionOptions({
     id: "categories",
     schema: CategorySchema,
     tableName: "categories",
     dbName: "todoist",
-    getKey: (item: Category) => item.id,
+    getKey: (item) => item.id,
   })
 );
 
 const baseTagsCollection = createCollection(
-  indexdbCollectionOptions({
+  dexieCollectionOptions({
     id: "tags",
     schema: TagSchema,
     tableName: "tags",
     dbName: "todoist",
-    getKey: (item: Tag) => item.id,
+    getKey: (item) => item.id,
   })
 );
 
@@ -251,6 +268,7 @@ export async function getTagById(id: string): Promise<Tag | undefined> {
 
 // Export additional collections and utilities
 export const pinnedNotes = pinnedNotesCollection;
+export const unpinnedNotes = unpinnedNotesCollection;
 export const activeProjects = projectsCollection;
 export const db = {
   notes: baseNotesCollection,
