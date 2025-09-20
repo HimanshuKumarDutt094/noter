@@ -119,6 +119,12 @@ export function NoteList({
   }, [notes]);
 
   const handleImportClick = useCallback(() => {
+    console.debug(
+      "[note-list] handleImportClick: triggering file input click",
+      {
+        hasRef: !!fileInputRef.current,
+      }
+    );
     fileInputRef.current?.click();
   }, []);
 
@@ -128,7 +134,14 @@ export function NoteList({
       if (!file) return;
 
       try {
+        console.debug("[note-list] handleFileChange start", {
+          fileName: file.name,
+          fileType: file.type,
+        });
         const importedNotes = await importNotes(file);
+        console.debug("[note-list] importNotes returned", {
+          count: importedNotes.length,
+        });
         // Determine project id to attach: prefer explicit `projectId` query
         // (used by project view deep-links), but fall back to the
         // `project` filter query used by the Notes page UI.
@@ -151,6 +164,7 @@ export function NoteList({
       } finally {
         // Reset the input value to allow re-importing the same file
         if (fileInputRef.current) {
+          console.debug("[note-list] resetting file input value");
           fileInputRef.current.value = "";
         }
       }
@@ -243,6 +257,13 @@ export function NoteList({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept=".json,.txt,text/plain"
+              className="hidden"
+            />
             <Tabs
               value={viewMode}
               onValueChange={(value) => setViewMode(value as ViewMode)}
@@ -492,13 +513,7 @@ export function NoteList({
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileChange}
-                accept=".json,.txt,text/plain"
-                className="hidden"
-              />
+              {/* file input moved to the toolbar so it exists regardless of list state */}
               <Button
                 size="sm"
                 variant="outline"

@@ -42,9 +42,19 @@ export function NotesHeader({
       if (!file) return;
 
       try {
+        console.debug("[notes-header] handleFileChange start", {
+          fileName: file.name,
+          fileType: file.type,
+        });
         const text = await file.text();
+        console.debug("[notes-header] file read complete", {
+          length: text.length,
+        });
         // Split by empty lines to separate notes
         const notes = text.split(/\n\s*\n/).filter((note) => note.trim());
+        console.debug("[notes-header] parsed notes from txt", {
+          count: notes.length,
+        });
         onImportNotes(notes);
         toast.success(`Imported ${notes.length} notes`);
       } catch (error) {
@@ -53,6 +63,7 @@ export function NotesHeader({
       } finally {
         // Reset file input
         if (fileInputRef.current) {
+          console.debug("[notes-header] resetting file input value");
           fileInputRef.current.value = "";
         }
       }
@@ -96,6 +107,12 @@ export function NotesHeader({
               <DropdownMenuItem
                 onPointerDown={(e) => {
                   e.preventDefault();
+                  console.debug(
+                    "[notes-header] Import from TXT clicked; triggering file input click",
+                    {
+                      hasRef: !!fileInputRef.current,
+                    }
+                  );
                   fileInputRef.current?.click();
                 }}
               >

@@ -6,11 +6,15 @@ export const exportNotes = (notes: Note[], filename = "notes-export.json") => {
   const dataStr = JSON.stringify(notes, null, 2);
   // Guard for SSR/test environments
   if (typeof document === "undefined") {
-    console.warn("exportNotes skipped: document is not available in this environment");
+    console.warn(
+      "exportNotes skipped: document is not available in this environment"
+    );
     return;
   }
 
-  const dataUri = `data:application/json;charset=utf-8,${encodeURIComponent(dataStr)}`;
+  const dataUri = `data:application/json;charset=utf-8,${encodeURIComponent(
+    dataStr
+  )}`;
   const linkElement = document.createElement("a");
   linkElement.setAttribute("href", dataUri);
   linkElement.setAttribute("download", filename);
@@ -37,9 +41,7 @@ const ImportNoteSchema = z
 
 type ImportPayload = Omit<Note, "id" | "createdAt" | "updatedAt">;
 
-export const importNotes = (
-  file: File
-): Promise<Array<ImportPayload>> => {
+export const importNotes = (file: File): Promise<Array<ImportPayload>> => {
   return new Promise((resolve, reject) => {
     // Guard for non-browser environments
     if (typeof FileReader === "undefined") {
@@ -52,16 +54,25 @@ export const importNotes = (
     reader.onload = (event) => {
       try {
         const content = event.target?.result as string;
+        console.debug("[import-export] reader.onload: content length", {
+          length: content?.length ?? 0,
+          fileName: file.name,
+          fileType: file.type,
+        });
         const nameLower = file.name.toLowerCase();
         const isTxt = file.type === "text/plain" || nameLower.endsWith(".txt");
 
         if (isTxt) {
+          console.debug("[import-export] detected TXT file, parsing lines");
           // Each non-empty line becomes a note; title derived from content
           const lines = content
             .split(/\r?\n/)
             .map((l) => l.trim())
             .filter((l) => l.length > 0);
 
+          console.debug("[import-export] txt parse result", {
+            lines: lines.length,
+          });
           const notes = lines.map((line) => {
             const title = line.length > 60 ? `${line.slice(0, 57)}...` : line;
             const payload: ImportPayload = {
@@ -82,6 +93,7 @@ export const importNotes = (
         }
 
         // JSON fallback
+        console.debug("[import-export] attempting JSON parse");
         const raw = JSON.parse(content) as unknown;
         if (!Array.isArray(raw)) {
           throw new Error("Invalid file format: expected an array of notes");
@@ -114,8 +126,8 @@ export const importNotes = (
             content: n.content,
             color: n.color ?? undefined,
             // Keep legacy single fields for compatibility if present
-            projectId: n.projectId ?? (projectIds[0] ?? undefined),
-            categoryId: n.categoryId ?? (categoryIds[0] ?? undefined),
+            projectId: n.projectId ?? projectIds[0] ?? undefined,
+            categoryId: n.categoryId ?? categoryIds[0] ?? undefined,
             // Normalized arrays
             projectIds,
             categoryIds,
@@ -127,11 +139,18 @@ export const importNotes = (
         });
 
         if (errors.length > 0) {
-          const msg = `Failed to parse ${errors.length} items: ` +
+          console.warn("[import-export] some items failed validation", {
+            errors,
+          });
+          const msg =
+            `Failed to parse ${errors.length} items: ` +
             errors.map((e) => `#${e.index}: ${e.message}`).join("; ");
           throw new Error(msg);
         }
 
+        console.debug("[import-export] json parse normalized items", {
+          count: normalized.length,
+        });
         resolve(normalized);
       } catch (error) {
         console.error("Error parsing notes:", error);

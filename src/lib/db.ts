@@ -214,21 +214,48 @@ export const tagsCollection = createCollection(
 export function createPagedNotesCollection({
   page = 0,
   limit = 50,
+  archived,
+  pinned,
 }: {
   page?: number;
   limit?: number;
+  // optional filters: pass `false` to exclude archived/pinned notes
+  archived?: boolean | undefined;
+  pinned?: boolean | undefined;
 }) {
-  const id = `notes-page-${limit}-${page}`;
+  const id = `notes-page-${limit}-${page}-${String(archived)}-${String(
+    pinned
+  )}`;
 
   return createCollection(
     liveQueryCollectionOptions({
       id,
-      query: (q) =>
-        q
-          .from({ note: baseNotesCollection })
+      // Ensure paged collections start the Dexie sync so the reactive layer
+      // has data to page through (matches other collections like unpinned)
+      startSync: true,
+      query: (q) => {
+        let qb = q.from({ note: baseNotesCollection });
+        // Apply optional filters to match collection semantics like `unpinnedNotesCollection`
+        if (archived !== undefined || pinned !== undefined) {
+          qb = qb.where(({ note }) => {
+            const exprs = [];
+            if (archived !== undefined)
+              exprs.push(eq(note.isArchived, archived));
+            if (pinned !== undefined) exprs.push(eq(note.isPinned, pinned));
+            if (exprs.length === 0) return exprs[0];
+            // Combine expressions with `and`
+            let combined = exprs[0];
+            for (let i = 1; i < exprs.length; i++)
+              combined = and(combined, exprs[i]);
+            return combined;
+          });
+        }
+
+        return qb
           .orderBy(({ note }) => note.updatedAt, "desc")
           .limit(limit)
-          .offset(page * limit),
+          .offset(page * limit);
+      },
     })
   );
 }

@@ -9,13 +9,13 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
   baseNotesCollection,
   pinnedNotesCollection,
-  unpinnedNotesCollection,
+  createPagedNotesCollection,
 } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { nowIso } from "@/lib/time";
-import { useLiveQuery } from "@tanstack/react-db";
 import { parseAsString, useQueryState } from "nuqs";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useLiveQuery } from "@tanstack/react-db";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 export function NotesPage() {
@@ -36,46 +36,75 @@ export function NotesPage() {
     parseAsString.withDefault("")
   );
 
-  // Pagination functionality will be added later with collection-specific implementation
-  const sentinel = useRef<HTMLDivElement | null>(null);
+  // Page-based loading (infinite scroll)
+  const PAGE_SIZE = 10;
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
 
-  // Use predefined live collections for consistent data flow
-  // This ensures proper reactivity and avoids timing issues with optimistic updates
+  // Memoize the paged collection to avoid recreating it every render
+  const pagedCollection = useMemo(
+    () =>
+      createPagedNotesCollection({
+        page: 0,
+        limit,
+        archived: false,
+        pinned: false,
+      }),
+    [limit]
+  );
+
+  // Use the paged live collection so Dexie sync is started and paging works
   const {
     data: allNotes,
     isLoading,
     status,
     isIdle,
     isCleanedUp,
-  } = useLiveQuery(unpinnedNotesCollection);
+  } = useLiveQuery(pagedCollection);
 
   useEffect(() => {
     console.debug(
       `[notes-page] useLiveQuery status: isLoading=${isLoading}, isIdle=${isIdle}, isCleanedUp=${isCleanedUp}`
     );
-    console.debug(`[notes-page] allNotes count: ${allNotes?.length ?? 0}`);
+    console.debug(
+      `[notes-page] allNotes count (loaded): ${
+        allNotes?.length ?? 0
+      } (limit=${limit})`
+    );
     console.debug(`[notes-page] full status:`, { status });
-  }, [isLoading, isIdle, isCleanedUp, allNotes, status]);
+  }, [isLoading, isIdle, isCleanedUp, allNotes, status, limit]);
 
   // Use the predefined pinnedNotesCollection for consistent pinned state
   const { data: allPinned } = useLiveQuery(pinnedNotesCollection);
   useEffect(() => {
-    // TODO: Implement pagination with predefined collections if needed
-    // For now, remove infinite scroll to fix reactivity issues
-    const el = sentinel.current;
-    if (!el) return;
-
-    // Placeholder for future pagination implementation
+    if (!sentinel) return;
     const obs = new IntersectionObserver(
-      () => {
-        // Pagination will be implemented later
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          // Only increase the limit if the previously-loaded count equals the current limit
+          // (indicating there may be more items). This prevents repeatedly growing `limit`
+          // when the collection has fewer items than the requested limit.
+          const loaded = (
+            allNotes && Array.isArray(allNotes) ? allNotes.length : 0
+          ) as number;
+          console.debug(
+            `[notes-page] observer: loaded=${loaded}, limit=${limit}, isIntersecting=${entry.isIntersecting}`
+          );
+          if (loaded >= limit) {
+            console.debug(
+              `[notes-page] increasing limit ${limit} -> ${limit + PAGE_SIZE}`
+            );
+            setLimit((l) => l + PAGE_SIZE);
+          }
+        });
       },
       { root: null, rootMargin: "200px", threshold: 0.1 }
     );
 
-    obs.observe(el);
+    obs.observe(sentinel);
     return () => obs.disconnect();
-  }, []);
+  }, [sentinel, allNotes, limit]);
 
   // Search/filtering handled directly in useLiveQuery; keep `notes` alias
   const notes = allNotes;
@@ -421,7 +450,7 @@ export function NotesPage() {
       />
 
       {/* Invisible sentinel element for infinite scroll */}
-      <div ref={sentinel} />
+      <div ref={setSentinel} />
 
       <Dialog open={isEditorOpen} onOpenChange={setIsEditorOpen}>
         <DialogContent className="max-w-4xl max-h-[95vh] overflow-y-auto p-0">
