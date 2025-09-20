@@ -4,7 +4,7 @@ import {
   type Category,
   type Tag,
 } from "@/collections/categories";
-import { dexieCollectionOptions } from "@/collections/dexie-collection-option";
+import { dexieCollectionOptions } from "tanstack-dexie-db-collection";
 import { NoteSchema } from "@/collections/notes";
 import { PreferencesSchema } from "@/collections/preferences";
 import { ProjectSchema } from "@/collections/projects";
