@@ -5,7 +5,7 @@ const PRECACHE_URLS = ["/", "index.html"];
 function isHashedAsset(path) {
   return (
     /\.[0-9a-f]{6,}\./i.test(path) ||
-    /\.(?:js|css|png|jpg|svg|webp|woff2?|wasm|data)$/.test(path)
+    /\.(?:js|css|png|jpg|svg|webp|woff2?)$/.test(path)
   );
 }
 
@@ -45,11 +45,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   // For hashed/static assets -> cache-first
-  if (
-    isHashedAsset(url.pathname) ||
-    url.pathname.endsWith(".wasm") ||
-    url.pathname.endsWith(".data")
-  ) {
+  if (isHashedAsset(url.pathname)) {
     event.respondWith(
       caches.match(request).then((cached) => {
         if (cached) return cached;
