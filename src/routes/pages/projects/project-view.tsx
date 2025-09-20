@@ -1,10 +1,10 @@
-import type {
-  CreateNoteInput,
-  Note,
-  UpdateNoteInput,
-} from "@/collections/notes";
+import type { Note } from "@/collections/notes";
 import { NoteEditor } from "@/components/notes/note-editor";
 import { NoteList } from "@/components/notes/note-list";
+import {
+  MoveNoteDialog,
+  type MoveNotePayload,
+} from "@/components/notes/move-note-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { baseNotesCollection, baseProjectsCollection } from "@/lib/db";
@@ -30,9 +30,16 @@ export function ProjectView() {
     "projectId",
     parseAsString.withDefault("")
   );
+  // Support opening the editor via ?edit=<id> just like the notes page
+  const [urlEdit, setUrlEdit] = useQueryState(
+    "edit",
+    parseAsString.withDefault("")
+  );
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [editingNote, setEditingNote] = useState<null>(null);
+  const [editingNote, setEditingNote] = useState<
+    import("@/collections/notes").Note | null
+  >(null);
 
   const { data: [project] = [], isLoading } = useLiveQuery((q) =>
     q
@@ -57,12 +64,25 @@ export function ProjectView() {
   ) as unknown as {
     data: Note[];
   };
+  // Split pinned vs other notes and scope to project
+  const pinnedNotes: Note[] = (activeNotes || [])
+    .filter((note: Note) => {
+      if (!projectId) return false;
+      return (
+        note.isPinned &&
+        Array.isArray(note.projectIds) &&
+        note.projectIds.includes(projectId)
+      );
+    })
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
   const notes: Note[] = (activeNotes || [])
     .filter((note: Note) => {
       if (!projectId) return false;
-      // Only multi-project linkage; legacy single field removed
       return (
-        Array.isArray(note.projectIds) && note.projectIds.includes(projectId)
+        !note.isPinned &&
+        Array.isArray(note.projectIds) &&
+        note.projectIds.includes(projectId)
       );
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -93,6 +113,270 @@ export function ProjectView() {
     },
     []
   );
+  // Create a new note (scoped to this project by default)
+  const handleCreateNote = useCallback(
+    async (noteData: Omit<Note, "id" | "createdAt" | "updatedAt">) => {
+      try {
+        const now = nowIso();
+        const newNote: Note = {
+          ...noteData,
+          id: newId(),
+          createdAt: now,
+          updatedAt: now,
+          isArchived: false,
+          isPinned: false,
+          projectIds: Array.isArray(noteData.projectIds)
+            ? noteData.projectIds
+            : projectId
+            ? [projectId]
+            : [],
+          categoryIds: Array.isArray(noteData.categoryIds)
+            ? noteData.categoryIds
+            : noteData.categoryId
+            ? [noteData.categoryId]
+            : [],
+          tagIds: noteData.tagIds ?? [],
+        } as Note;
+
+        baseNotesCollection.insert(newNote);
+        setIsEditorOpen(false);
+        toast.success("Note created successfully!");
+      } catch (error) {
+        console.error("Error creating note:", error);
+        toast.error("Failed to create note. Please try again.");
+      }
+    },
+    [projectId]
+  );
+
+  // Update an existing note
+  const handleUpdateNote = useCallback(async (note: Note) => {
+    try {
+      await baseNotesCollection.update(note.id, (draft) => {
+        Object.assign(draft, {
+          ...note,
+          updatedAt: nowIso(),
+        });
+        draft.projectIds = Array.isArray(note.projectIds)
+          ? note.projectIds
+          : note.projectId
+          ? [note.projectId]
+          : draft.projectIds ?? [];
+        draft.categoryIds = Array.isArray(note.categoryIds)
+          ? note.categoryIds
+          : note.categoryId
+          ? [note.categoryId]
+          : draft.categoryIds ?? [];
+        draft.tagIds = Array.isArray(note.tagIds)
+          ? note.tagIds
+          : draft.tagIds ?? [];
+      });
+
+      setIsEditorOpen(false);
+      setEditingNote(null);
+      toast.success("Note updated successfully!");
+    } catch (error) {
+      console.error("Error updating note:", error);
+      toast.error("Failed to update note. Please try again.");
+    }
+  }, []);
+
+  // Delete a note
+  const handleDeleteNote = useCallback(async (id: string) => {
+    try {
+      await baseNotesCollection.delete(id);
+      toast.success("Note moved to trash");
+    } catch (error) {
+      console.error("Error deleting note:", error);
+      toast.error("Failed to delete note. Please try again.");
+    }
+  }, []);
+
+  // Open Move dialog
+  const [isMoveOpen, setIsMoveOpen] = useState(false);
+  const [moveNote, setMoveNote] = useState<Note | null>(null);
+
+  const handleOpenMove = useCallback(
+    (id: string) => {
+      const n = notes.find((x) => x.id === id) || null;
+      setMoveNote(n);
+      setIsMoveOpen(!!n);
+    },
+    [notes]
+  );
+
+  // Apply Move
+  const handleMoveNote = useCallback(
+    async ({
+      noteId,
+      projectIds,
+      keepCategories,
+      keepTags,
+    }: MoveNotePayload) => {
+      try {
+        await baseNotesCollection.update(noteId, (draft) => {
+          draft.projectIds = Array.isArray(projectIds) ? projectIds : [];
+          if (!keepCategories) draft.categoryIds = [];
+          if (!keepTags) draft.tagIds = [];
+          draft.updatedAt = nowIso();
+        });
+        toast.success("Note moved");
+      } catch (error) {
+        console.error("Error moving note:", error);
+        toast.error("Failed to move note. Please try again.");
+      } finally {
+        setIsMoveOpen(false);
+        setMoveNote(null);
+      }
+    },
+    []
+  );
+
+  // Clone a note
+  const handleCloneNote = useCallback(
+    async (id: string) => {
+      try {
+        const original = notes.find((n) => n.id === id);
+        if (!original) return;
+        const now = nowIso();
+
+        const { ...clean } = original;
+
+        const newIdVal = newId();
+        baseNotesCollection.insert({
+          ...clean,
+          id: newIdVal,
+          title: original.title
+            ? `${original.title} (Copy)`
+            : "Untitled Note (Copy)",
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        const utilsAny = baseNotesCollection.utils as unknown as
+          | {
+              awaitIds?: (
+                ids: Array<string | number>,
+                timeoutMs?: number
+              ) => Promise<void>;
+            }
+          | undefined;
+        if (utilsAny?.awaitIds) await utilsAny.awaitIds([newIdVal]);
+
+        toast.success("Note cloned");
+      } catch (error) {
+        console.error("Error cloning note:", error);
+        toast.error("Failed to clone note. Please try again.");
+      }
+    },
+    [notes]
+  );
+
+  // Toggle pin status
+  const handleTogglePin = useCallback(async (id: string) => {
+    try {
+      await baseNotesCollection.update(id, (draft) => {
+        draft.isPinned = !draft.isPinned;
+        draft.updatedAt = nowIso();
+      });
+      toast.success("Note updated");
+    } catch (error) {
+      console.error("Error toggling pin status:", error);
+      toast.error("Failed to update note. Please try again.");
+    }
+  }, []);
+
+  // Archive a note
+  const handleArchiveNote = useCallback(async (id: string) => {
+    try {
+      await baseNotesCollection.update(id, (draft) => {
+        draft.isArchived = true;
+        draft.updatedAt = nowIso();
+      });
+
+      toast.success("Note archived");
+    } catch (error) {
+      console.error("Error archiving note:", error);
+      toast.error("Failed to archive note. Please try again.");
+    }
+  }, []);
+
+  const handleSaveNote = useCallback(
+    async (noteData: Partial<Note>) => {
+      if (!noteData.title || !noteData.content) {
+        toast.error("Title and content are required");
+        return;
+      }
+
+      try {
+        if (editingNote) {
+          const updatedNote: Note = {
+            ...editingNote,
+            ...noteData,
+            updatedAt: nowIso(),
+            tagIds: noteData.tagIds ?? editingNote.tagIds ?? [],
+            projectIds:
+              noteData.projectIds && Array.isArray(noteData.projectIds)
+                ? (noteData.projectIds as string[])
+                : noteData.projectId
+                ? [noteData.projectId]
+                : editingNote.projectIds ??
+                  (editingNote.projectId ? [editingNote.projectId] : []),
+            categoryIds:
+              noteData.categoryIds && Array.isArray(noteData.categoryIds)
+                ? (noteData.categoryIds as string[])
+                : noteData.categoryId
+                ? [noteData.categoryId]
+                : editingNote.categoryIds ??
+                  (editingNote.categoryId ? [editingNote.categoryId] : []),
+            isArchived: noteData.isArchived ?? editingNote.isArchived,
+            isPinned: noteData.isPinned ?? editingNote.isPinned,
+          } as Note;
+          await handleUpdateNote(updatedNote);
+        } else {
+          const newNote: Omit<Note, "id" | "createdAt" | "updatedAt"> = {
+            title: noteData.title!,
+            content: noteData.content!,
+            color: noteData.color,
+            projectIds: Array.isArray(noteData.projectIds)
+              ? (noteData.projectIds as string[])
+              : noteData.projectId
+              ? [noteData.projectId]
+              : projectId
+              ? [projectId]
+              : [],
+            categoryIds: Array.isArray(noteData.categoryIds)
+              ? (noteData.categoryIds as string[])
+              : noteData.categoryId
+              ? [noteData.categoryId]
+              : [],
+            tagIds: noteData.tagIds ?? [],
+            isArchived: false,
+            isPinned: false,
+          };
+
+          await handleCreateNote(newNote as Note);
+        }
+      } catch (error) {
+        console.error("Error saving note:", error);
+        toast.error("Failed to save note. Please try again.");
+      }
+    },
+    [editingNote, handleUpdateNote, handleCreateNote, projectId]
+  );
+  // Immediately open editor and set editing note when edit is clicked
+  const handleEditNote = useCallback(
+    (id: string) => {
+      const noteToEdit = [...notes, ...pinnedNotes].find((n) => n.id === id);
+      if (noteToEdit) {
+        setEditingNote(noteToEdit);
+        setIsEditorOpen(true);
+      }
+      // Keep URL in sync for deep-links
+      void setUrlEdit(id);
+    },
+    [notes, pinnedNotes, setUrlEdit]
+  );
   useEffect(() => {
     const shouldOpen = urlNew === "1";
     if (shouldOpen) {
@@ -102,6 +386,31 @@ export function ProjectView() {
       void setUrlNew("");
     }
   }, [urlNew, setUrlNew]);
+
+  // Keep the `projectId` query param set while on this view so child
+  // components like `NoteList` can use it (for imports, deep-links, etc.)
+  useEffect(() => {
+    if (projectId) {
+      void setUrlProjectId(projectId);
+    }
+    return () => {
+      // Clear when leaving the view
+      void setUrlProjectId("");
+    };
+  }, [projectId, setUrlProjectId]);
+
+  // Open editor when navigated with ?edit=<id> on project view
+  useEffect(() => {
+    if (!urlEdit) return;
+    const found =
+      [...notes, ...pinnedNotes].find((n) => n.id === urlEdit) || null;
+    if (found) {
+      setEditingNote(found);
+      setIsEditorOpen(true);
+      // Clear the flag to avoid reopening on re-renders
+      void setUrlEdit("");
+    }
+  }, [urlEdit, setUrlEdit, notes, pinnedNotes]);
 
   if (!projectId) {
     return (
@@ -206,10 +515,13 @@ export function ProjectView() {
           <h2 className="text-xl font-semibold mb-4">Notes in this project</h2>
           <NoteList
             notes={notes}
-            onEditNote={(id) => navigate(routes.notes.view(id))}
-            onDeleteNote={() => {}}
-            onTogglePin={() => {}}
-            onArchiveNote={() => {}}
+            pinnedNotes={pinnedNotes}
+            onEditNote={handleEditNote}
+            onDeleteNote={handleDeleteNote}
+            onTogglePin={handleTogglePin}
+            onArchiveNote={handleArchiveNote}
+            onCloneNote={handleCloneNote}
+            onMoveNote={handleOpenMove}
             onAddNote={() => {
               setEditingNote(null);
               setIsEditorOpen(true);
@@ -230,56 +542,7 @@ export function ProjectView() {
           <div className="p-6">
             <NoteEditor
               note={editingNote || undefined}
-              onSave={async (noteData: CreateNoteInput | UpdateNoteInput) => {
-                try {
-                  const now = nowIso();
-                  const payload: import("@/collections/notes").CreateNoteInput =
-                    {
-                      title:
-                        (noteData as CreateNoteInput).title ??
-                        (noteData as UpdateNoteInput).title ??
-                        "",
-                      content:
-                        (noteData as CreateNoteInput).content ??
-                        (noteData as UpdateNoteInput).content ??
-                        "",
-                      color:
-                        (noteData as CreateNoteInput).color ??
-                        (noteData as UpdateNoteInput).color,
-                      projectIds:
-                        (noteData as CreateNoteInput).projectIds ??
-                        (noteData as UpdateNoteInput).projectIds ??
-                        [],
-                      categoryIds:
-                        (noteData as CreateNoteInput).categoryIds ??
-                        (noteData as UpdateNoteInput).categoryIds ??
-                        [],
-                      tagIds:
-                        (noteData as CreateNoteInput).tagIds ??
-                        (noteData as UpdateNoteInput).tagIds ??
-                        [],
-                      isArchived:
-                        (noteData as CreateNoteInput).isArchived ??
-                        (noteData as UpdateNoteInput).isArchived ??
-                        false,
-                      isPinned:
-                        (noteData as CreateNoteInput).isPinned ??
-                        (noteData as UpdateNoteInput).isPinned ??
-                        false,
-                    };
-                  await baseNotesCollection.insert({
-                    ...payload,
-                    id: newId(),
-                    createdAt: now,
-                    updatedAt: now,
-                  } as import("@/collections/notes").Note);
-                  setIsEditorOpen(false);
-                  toast.success("Note created successfully!");
-                } catch (err) {
-                  console.error("Error creating note:", err);
-                  toast.error("Failed to create note. Please try again.");
-                }
-              }}
+              onSave={handleSaveNote}
               onCancel={() => {
                 setIsEditorOpen(false);
                 setEditingNote(null);
@@ -292,6 +555,15 @@ export function ProjectView() {
           </div>
         </DialogContent>
       </Dialog>
+      <MoveNoteDialog
+        open={isMoveOpen}
+        onOpenChange={(open) => {
+          setIsMoveOpen(open);
+          if (!open) setMoveNote(null);
+        }}
+        note={moveNote}
+        onMove={handleMoveNote}
+      />
     </div>
   );
 }

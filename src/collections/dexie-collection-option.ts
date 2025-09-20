@@ -187,7 +187,7 @@ export function dexieCollectionOptions<
           // Instead of checking database directly, check if data exists in DB
           // and give the reactive layer a chance to process it
           try {
-            const bulkFn = (table as any).bulkGet;
+            const bulkFn = table.bulkGet;
             let rows: unknown;
             if (typeof bulkFn === `function`) {
               rows = await bulkFn.call(table, ids);
