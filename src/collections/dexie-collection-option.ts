@@ -1,56 +1,6 @@
-/*
-Dexie Collection Options Creator for TanStack DB
-- Uses Dexie's native liveQuery() for reactive sync
-- Follows Pattern B (Built-in handlers) from create-collection.md
-- Leverages Dexie's built-in change detection and observable patterns
-- No complex driver abstraction - uses Dexie directly
-
-Usage: pass the returned object to createCollection() from TanStack DB.
-*/
-
-/**
- * Usage Examples (moved here as JSDoc):
- *
- * // With schema (recommended)
- * import { z } from 'zod';
- * const todoSchema = z.object({ id: z.string(), text: z.string(), completed: z.boolean() });
- *
- * const todos = createCollection(
- *   dexieCollectionOptions({
- *     id: 'todos',
- *     getKey: (todo) => todo.id,
- *     schema: todoSchema,
- *     tableName: 'todos',
- *   })
- * );
- *
- * // Without schema
- * const notes = createCollection(
- *   dexieCollectionOptions<{ id: string; content: string }>({
- *     id: 'notes',
- *     getKey: (note) => note.id,
- *     tableName: 'notes',
- *   })
- * );
- *
- * // With custom codec for data transformation
- * const users = createCollection(
- *   dexieCollectionOptions({
- *     id: 'users',
- *     getKey: (user) => user.id,
- *     codec: {
- *       parse: (raw) => ({ ...raw, createdAt: new Date(raw.createdAt) }),
- *       serialize: (user) => ({ ...user, createdAt: user.createdAt.toISOString() }),
- *     }
- *   })
- * );
- *
- * // Using enhanced utilities
- * await todos.utils.awaitIds(['todo-1', 'todo-2']); // Wait for optimistic updates
- * todos.utils.refresh(); // Manual refresh
- * const table = todos.utils.getTable(); // Direct Dexie table access
- */
-
+import Dexie, { liveQuery } from "dexie";
+import DebugModule from "debug";
+import { addDexieMetadata, stripDexieFields } from "./helpers";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type {
   CollectionConfig,
@@ -61,33 +11,9 @@ import type {
   UpdateMutationFnParams,
   UtilsRecord,
 } from "@tanstack/db";
-import Dexie, { liveQuery, type Table } from "dexie";
+import type { Table } from "dexie";
 
-// Type for tracking synced record IDs (Strategy 3 from create-collection.md)
-const seenIds = new Map<string | number, number>();
-
-// Await specific IDs to be synced (optimistic state management)
-const awaitIds = (ids: string[], timeoutMs = 10000): Promise<void> => {
-  const allSynced = ids.every((id) => seenIds.has(id));
-  if (allSynced) return Promise.resolve();
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`Timeout waiting for IDs: ${ids.join(", ")}`));
-    }, timeoutMs);
-
-    const checkIds = () => {
-      if (ids.every((id) => seenIds.has(id))) {
-        clearTimeout(timeout);
-        resolve();
-      } else {
-        setTimeout(checkIds, 100);
-      }
-    };
-
-    checkIds();
-  });
-};
+const debug = DebugModule.debug(`ts/db:dexie`);
 
 // Optional codec interface for data transformation
 export interface DexieCodec<TItem, TStored = TItem> {
@@ -95,42 +21,57 @@ export interface DexieCodec<TItem, TStored = TItem> {
   serialize?: (item: TItem) => TStored;
 }
 
-// Collection configuration interface - Pattern B: Built-in handlers
+/**
+ * Configuration interface for Dexie collection options
+ * @template TItem - The explicit type of items in the collection (highest priority)
+ * @template TSchema - The schema type for validation and type inference (second priority)
+ *
+ * @remarks
+ * Type resolution follows a priority order:
+ * 1. If you provide an explicit type via generic parameter, it will be used
+ * 2. If no explicit type is provided but a schema is, the schema's output type will be inferred
+ *
+ * You should provide EITHER an explicit type OR a schema, but not both, as they would conflict.
+ * Notice that primary keys in Dexie can be string or number.
+ */
 export interface DexieCollectionConfig<
   TItem extends object = Record<string, unknown>,
   TSchema extends StandardSchemaV1 = never
 > extends Omit<
     CollectionConfig<TItem, string | number, TSchema>,
-    "onInsert" | "onUpdate" | "onDelete" | "getKey" | "sync"
+    `onInsert` | `onUpdate` | `onDelete` | `getKey` | `sync`
   > {
-  // Dexie-specific config
   dbName?: string;
   tableName?: string;
-  storeName?: string; // alias for tableName for backward compatibility
+  storeName?: string;
   codec?: DexieCodec<TItem>;
-
-  // Collection options
   schema?: TSchema;
-  rowUpdateMode?: "partial" | "full";
+  rowUpdateMode?: `partial` | `full`;
+  syncBatchSize?: number;
+  ackTimeoutMs?: number;
+  awaitTimeoutMs?: number;
   getKey: (item: TItem) => string | number;
 }
 
 // Enhanced utils interface
-interface DexieUtils extends UtilsRecord {
-  // Direct database access
-  getTable: () => Table<Record<string, unknown>, string>;
+export interface DexieUtils extends UtilsRecord {
+  getTable: () => Table<Record<string, unknown>, string | number>;
 
-  // Optimistic state management
-  awaitIds: (ids: string[]) => Promise<void>;
+  awaitIds: (ids: Array<string | number>) => Promise<void>;
 
-  // Manual refresh
   refresh: () => void;
 
-  // Async refetch for tests and explicit usage
   refetch: () => Promise<void>;
 }
 
-// Function overloads for type safety - exactly like the old implementation
+/**
+ * Creates Dexie collection options for use with a standard Collection
+ *
+ * @template TItem - The explicit type of items in the collection (highest priority)
+ * @template TSchema - The schema type for validation and type inference (second priority)
+ * @param config - Configuration options for the Dexie collection
+ * @returns Collection options with utilities
+ */
 export function dexieCollectionOptions<T extends StandardSchemaV1>(
   config: DexieCollectionConfig<InferSchemaOutput<T>, T>
 ): CollectionConfig<InferSchemaOutput<T>, string | number, T> & {
@@ -151,20 +92,128 @@ export function dexieCollectionOptions<
 >(
   config: DexieCollectionConfig<TItem, TSchema>
 ): CollectionConfig<TItem, string | number, TSchema> & { utils: DexieUtils } {
-  const dbName = config.dbName || "app-db";
+  // Track IDs seen by the reactive layer (timestamp as value) - per collection instance
+  const seenIds = new Map<string | number, number>();
+
+  // Ack helpers: `ackedIds` = acknowledged IDs, `pendingAcks` = waiters - per collection instance
+  const ackedIds = new Set<string | number>();
+  const pendingAcks = new Map<
+    string | number,
+    {
+      promise: Promise<void>;
+      resolve: () => void;
+      reject: (err: unknown) => void;
+    }
+  >();
+
+  const dbName = config.dbName || `app-db`;
   const tableName =
-    config.tableName || config.storeName || config.id || "collection";
+    config.tableName || config.storeName || config.id || `collection`;
 
   // Initialize Dexie database
   const db = new Dexie(dbName);
   db.version(1).stores({
-    [tableName]: "&id, updatedAt", // id as primary key, updatedAt for sorting/conflict resolution
+    [tableName]: `&id, _updatedAt, _createdAt`, // Include our metadata fields for efficient sorting
   });
 
-  const table = db.table(tableName) as Table<
-    Record<string, unknown> & { id: string; updatedAt?: string },
-    string
-  >;
+  const table = db.table(tableName);
+
+  const awaitAckedIds = async (
+    ids: Array<string | number>,
+    timeoutMs = config.ackTimeoutMs || 2000
+  ) => {
+    const results: Array<Promise<void>> = [];
+    const timedOutIds: Array<string | number> = [];
+
+    for (const id of ids) {
+      if (ackedIds.has(id)) {
+        results.push(Promise.resolve());
+        continue;
+      }
+
+      const existing = pendingAcks.get(id);
+      if (existing) {
+        results.push(existing.promise);
+        continue;
+      }
+
+      let resolve!: () => void;
+      let reject!: (err: unknown) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+
+      void promise.catch(() => {});
+
+      pendingAcks.set(id, { promise, resolve, reject });
+
+      const t = setTimeout(() => {
+        if (!pendingAcks.has(id)) return;
+        pendingAcks.delete(id);
+        debug(`awaitAckedIds:timeout`, { id: String(id) });
+        timedOutIds.push(id);
+        resolve();
+      }, timeoutMs);
+
+      void promise.finally(() => clearTimeout(t));
+
+      results.push(promise);
+    }
+
+    await Promise.all(results);
+
+    if (timedOutIds.length > 0) {
+      throw new Error(
+        `Timeout waiting for acked ids: ${timedOutIds.join(`, `)}`
+      );
+    }
+  };
+
+  const awaitIds = async (
+    ids: Array<string | number>,
+    timeoutMs = config.awaitTimeoutMs || 10000
+  ): Promise<void> => {
+    try {
+      await awaitAckedIds(ids, config.ackTimeoutMs || 2000);
+      return;
+    } catch {
+      try {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+          const allSeen = ids.every((id) => seenIds.has(id));
+          if (allSeen) return;
+
+          // Instead of checking database directly, check if data exists in DB
+          // and give the reactive layer a chance to process it
+          try {
+            const bulkFn = (table as any).bulkGet;
+            let rows: unknown;
+            if (typeof bulkFn === `function`) {
+              rows = await bulkFn.call(table, ids);
+            } else {
+              rows = await Promise.all(ids.map((id) => table.get(id)));
+            }
+            const present = Array.isArray(rows) && rows.every((r) => r != null);
+            if (present) {
+              // Data exists in DB, trigger a refresh to ensure reactive layer processes it
+              triggerRefresh();
+              // Give the reactive layer a bit more time to process
+              await new Promise((r) => setTimeout(r, 100));
+
+              // Check again if the reactive layer has processed it
+              const allSeenAfterRefresh = ids.every((id) => seenIds.has(id));
+              if (allSeenAfterRefresh) return;
+            }
+          } catch {}
+
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      } catch {}
+
+      throw new Error(`Timeout waiting for IDs: ${ids.join(`, `)}`);
+    }
+  };
 
   // Schema validation helper following create-collection.md patterns
   const validateSchema = (item: unknown): TItem => {
@@ -204,21 +253,28 @@ export function dexieCollectionOptions<
 
   // Data transformation helpers
   const parse = (raw: Record<string, unknown>): TItem => {
-    let parsed: unknown = raw;
+    // First strip our internal metadata fields
+    const cleanedRaw = stripDexieFields(raw);
 
-    // Apply codec parse first
+    let parsed: unknown = cleanedRaw;
+
+    // Apply codec parse if provided
     if (config.codec?.parse) {
-      parsed = config.codec.parse(raw as never);
+      parsed = config.codec.parse(cleanedRaw as never);
     }
 
     // Then validate against schema - this is where TanStack DB handles validation
     // Schema validation is handled automatically by TanStack DB during insert/update operations
     // The schema is primarily used for type inference and automatic validation
-    // Here we just return the parsed data
-    return validateSchema(parsed);
+    const validated = validateSchema(parsed);
+
+    return validated;
   };
 
-  const serialize = (item: TItem): Record<string, unknown> => {
+  const serialize = (
+    item: TItem,
+    isUpdate = false
+  ): Record<string, unknown> => {
     let serialized: unknown = item;
 
     // Apply codec serialize
@@ -228,7 +284,8 @@ export function dexieCollectionOptions<
       serialized = item;
     }
 
-    return serialized as Record<string, unknown>;
+    // Add our metadata for efficient syncing and conflict resolution
+    return addDexieMetadata(serialized as Record<string, unknown>, isUpdate);
   };
 
   // Track refresh triggers for manual refresh capability
@@ -237,179 +294,395 @@ export function dexieCollectionOptions<
     refreshTrigger++;
   };
 
-  // Sync implementation using Dexie's liveQuery - the proper way!
-  const sync = (params: Parameters<SyncConfig<TItem>["sync"]>[0]) => {
+  // Shallow comparison helper for efficient change detection
+  const shallowEqual = (obj1: any, obj2: any): boolean => {
+    if (obj1 === obj2) return true;
+    if (!obj1 || !obj2) return false;
+    if (typeof obj1 !== `object` || typeof obj2 !== `object`) return false;
+
+    const keys1 = Object.keys(obj1);
+    const keys2 = Object.keys(obj2);
+
+    if (keys1.length !== keys2.length) return false;
+
+    for (const key of keys1) {
+      if (obj1[key] !== obj2[key]) return false;
+    }
+
+    return true;
+  };
+
+  /**
+   * "sync"
+   * Sync between the local Dexie table and the in-memory TanStack DB
+   * collection. Not a remote/server sync — keeps local reactive state
+   * and in-memory collection consistent.
+   */
+  const sync = (params: Parameters<SyncConfig<TItem>[`sync`]>[0]) => {
     const { begin, write, commit, markReady } = params;
 
     // Track the previous snapshot to implement proper diffing
     let previousSnapshot = new Map<string | number, TItem>();
 
-    // Create reactive query using liveQuery - this is the Dexie way!
-    const subscription = liveQuery(async () => {
-      // Add refreshTrigger as dependency to enable manual refresh
-      void refreshTrigger;
+    // Batched initial sync configuration
+    const syncBatchSize = config.syncBatchSize || 1000;
 
-      // Fetch all data from the table
-      const records = await table.toArray();
+    // Initial sync state
+    let isInitialSyncComplete = false;
+    let lastUpdatedAt: number | undefined;
+    let hasMarkedReady = false;
+    let subscription: any;
 
-      // Transform records and track seen IDs
-      const snapshot = new Map<string | number, TItem>();
+    const performInitialSync = async () => {
+      // initial sync started
 
-      for (const record of records) {
-        const item = parse(record);
-        const key = config.getKey(item);
+      begin();
+      let totalProcessed = 0;
 
-        // Track this ID as seen (for optimistic state management)
-        seenIds.set(key, Date.now());
+      for (;;) {
+        // Query next batch using _updatedAt for efficient pagination
+        let batchRecords: Array<any>;
 
-        snapshot.set(key, item);
+        if (lastUpdatedAt) {
+          // Continue from where we left off using where().above()
+          batchRecords = await table
+            .where(`_updatedAt`)
+            .above(lastUpdatedAt)
+            .limit(syncBatchSize)
+            .toArray();
+        } else {
+          // First batch - get oldest records, or all records if no _updatedAt exists
+          try {
+            batchRecords = await table
+              .orderBy(`_updatedAt`)
+              .limit(syncBatchSize)
+              .toArray();
+          } catch {
+            // Fallback for records without _updatedAt (pre-existing data)
+            batchRecords = await table.limit(syncBatchSize).toArray();
+          }
+        }
+
+        if (batchRecords.length === 0) {
+          // No more records, initial sync is complete
+          break;
+        }
+
+        // Process this batch
+        const batchSnapshot = new Map<string | number, TItem>();
+
+        for (const record of batchRecords) {
+          let item: TItem;
+          try {
+            item = parse(record);
+          } catch (err) {
+            // Skip invalid records
+            debug(`parse:error`, { id: record?.id, error: err });
+            continue;
+          }
+
+          const key = config.getKey(item);
+
+          // Track this ID as seen (for optimistic state management)
+          seenIds.set(key, Date.now());
+
+          // Mark ack for this id (reactive layer has observed it)
+          ackedIds.add(key);
+          const pending = pendingAcks.get(key);
+          if (pending) {
+            try {
+              pending.resolve();
+            } catch {}
+            pendingAcks.delete(key);
+          }
+
+          batchSnapshot.set(key, item);
+
+          // Update lastUpdatedAt for next batch (use our metadata field)
+          const updatedAt = record._updatedAt;
+          if (updatedAt && (!lastUpdatedAt || updatedAt > lastUpdatedAt)) {
+            lastUpdatedAt = updatedAt;
+          }
+        }
+
+        // Write this batch to TanStack DB
+        for (const [, item] of batchSnapshot) {
+          write({
+            type: `insert`,
+            value: item,
+          });
+          previousSnapshot.set(config.getKey(item), item);
+        }
+
+        totalProcessed += batchRecords.length;
+
+        // If we got less than batch size, we're done
+        if (batchRecords.length < syncBatchSize) {
+          break;
+        }
       }
 
-      return snapshot;
-    }).subscribe({
-      next: (currentSnapshot) => {
-        // Use begin/write/commit pattern from create-collection.md
-        begin();
+      commit();
+      isInitialSyncComplete = true;
 
-        // Process insertions and updates
-        for (const [key, item] of currentSnapshot) {
-          if (previousSnapshot.has(key)) {
-            // Item existed before, this is an update
-            const previousItem = previousSnapshot.get(key);
-            // Only write if the item actually changed (simple JSON comparison)
-            if (JSON.stringify(previousItem) !== JSON.stringify(item)) {
+      debug(`sync:initial-complete`, { totalProcessed });
+
+      // Add memory usage warning for large collections
+      if (totalProcessed > 5000) {
+        debug(`sync:large-collection`, { totalProcessed });
+      }
+    };
+
+    // Start the sync process
+    const startSync = async () => {
+      // Perform initial sync first, outside of liveQuery
+      await performInitialSync();
+
+      // Start the liveQuery subscription to monitor ongoing changes
+      startLiveQuery();
+
+      // Mark as ready after initial sync completes
+      if (!hasMarkedReady) {
+        try {
+          markReady();
+        } finally {
+          hasMarkedReady = true;
+        }
+      }
+    };
+
+    // Start live monitoring of changes (after initial sync)
+    const startLiveQuery = () => {
+      subscription = liveQuery(async () => {
+        void refreshTrigger;
+
+        if (!isInitialSyncComplete) {
+          return previousSnapshot;
+        }
+
+        const records = await table.toArray();
+
+        const snapshot = new Map<string | number, TItem>();
+
+        for (const record of records) {
+          let item: TItem;
+          try {
+            item = parse(record);
+          } catch (err) {
+            // Skip invalid records instead of letting liveQuery throw
+
+            debug(`parse:skip`, { id: record?.id, error: err });
+
+            continue;
+          }
+
+          const key = config.getKey(item);
+
+          // Track this ID as seen (for optimistic state management)
+          seenIds.set(key, Date.now());
+
+          // Mark ack for this id (reactive layer has observed it)
+          ackedIds.add(key);
+          const pending = pendingAcks.get(key);
+          if (pending) {
+            try {
+              pending.resolve();
+            } catch {}
+            pendingAcks.delete(key);
+          }
+
+          snapshot.set(key, item);
+        }
+
+        return snapshot;
+      }).subscribe({
+        next: (currentSnapshot) => {
+          // Skip processing during initial sync - it's handled separately
+          if (!isInitialSyncComplete) {
+            // Mark ready after initial sync
+            if (!hasMarkedReady) {
+              try {
+                markReady();
+              } finally {
+                hasMarkedReady = true;
+              }
+            }
+            return;
+          }
+
+          begin();
+
+          for (const [key, item] of currentSnapshot) {
+            if (previousSnapshot.has(key)) {
+              const previousItem = previousSnapshot.get(key);
+              const currentUpdatedAt = (item as any)._updatedAt;
+              const previousUpdatedAt = (previousItem as any)._updatedAt;
+
+              let hasChanged = false;
+              if (currentUpdatedAt && previousUpdatedAt) {
+                hasChanged = currentUpdatedAt !== previousUpdatedAt;
+              } else {
+                hasChanged = !shallowEqual(previousItem, item);
+              }
+
+              if (hasChanged) {
+                write({
+                  type: `update`,
+                  value: item,
+                });
+              }
+            } else {
+              // New item, this is an insert
               write({
-                type: "update",
+                type: `insert`,
                 value: item,
               });
             }
-          } else {
-            // New item, this is an insert
-            write({
-              type: "insert",
-              value: item,
-            });
           }
-        }
 
-        // Process deletions - items that were in previous but not in current
-        for (const [key, item] of previousSnapshot) {
-          if (!currentSnapshot.has(key)) {
-            write({
-              type: "delete",
-              value: item, // Use the full item for deletion
-            });
+          // Process deletions - items that were in previous but not in current
+          for (const [key, item] of previousSnapshot) {
+            if (!currentSnapshot.has(key)) {
+              write({
+                type: `delete`,
+                value: item, // Use the full item for deletion
+              });
+            }
           }
-        }
 
-        // Update our snapshot for the next comparison
-        previousSnapshot = new Map(currentSnapshot);
+          // Update our snapshot for the next comparison
+          previousSnapshot = new Map(currentSnapshot);
 
-        commit();
-      },
-      error: (error) => {
-        console.error("Dexie liveQuery error:", error);
-        // Still mark ready even on error (as per create-collection.md)
-        markReady();
-      },
-    });
+          commit();
 
-    // Mark ready after subscription is established
-    markReady();
+          // live commit completed
+
+          // After the first emission/commit, mark the collection as ready so
+          // callers awaiting stateWhenReady() observe the initial data.
+          if (!hasMarkedReady) {
+            try {
+              markReady();
+            } finally {
+              hasMarkedReady = true;
+            }
+          }
+        },
+        error: (error) => {
+          debug(`sync:live-error`, { error });
+          // Still mark ready even on error (as per create-collection.md)
+          if (!hasMarkedReady) {
+            try {
+              markReady();
+            } finally {
+              hasMarkedReady = true;
+            }
+          }
+        },
+      });
+    };
+
+    // Start the sync process
+    startSync();
 
     // Return cleanup function (critical requirement from create-collection.md)
     return () => {
-      subscription?.unsubscribe?.();
+      if (subscription) {
+        subscription.unsubscribe();
+      }
     };
   };
 
   // Built-in mutation handlers (Pattern B) - we implement these directly using Dexie APIs
-  const onInsert = async (params: InsertMutationFnParams<TItem>) => {
-    const mutations = params.transaction.mutations;
+  const onInsert = async (insertParams: InsertMutationFnParams<TItem>) => {
+    // Ensure the collection's sync is running so the reactive layer
+    // (liveQuery) can observe writes and ack them. Use the public
+    // startSyncImmediate() helper to avoid accessing internals.
+    insertParams.collection.startSyncImmediate();
 
-    // Prepare items for bulk insert
+    const mutations = insertParams.transaction.mutations;
+
     const items = mutations.map((mutation) => {
-      const item = serialize(mutation.modified);
+      const item = serialize(mutation.modified, false); // false = not an update
       return {
         ...item,
         id: mutation.key,
-        updatedAt: new Date().toISOString(),
-      } as Record<string, unknown> & { id: string; updatedAt: string };
+      } as Record<string, unknown> & { id: string | number };
     });
+
+    // bulk insert
 
     // Perform bulk operation using Dexie transaction
-    await db.transaction("rw", table, async () => {
+    await db.transaction(`rw`, table, async () => {
       await table.bulkPut(items);
     });
+    await db.table(tableName).count();
 
-    // Wait for the IDs to be synced back (optimistic state management)
+    // Optimistically mark IDs as seen immediately after write so callers
+    // waiting with `awaitIds` don't have to wait for the reactive layer
+    // to observe the change. Do not block the insert handler on the reactive
+    // layer ack — awaiting here can cause races between multiple instances
+    // where a second insert observes the first insert and throws a DuplicateKey
+    // error. The reactive layer will still ack and update synced state.
     const ids = mutations.map((m) => m.key);
-    await awaitIds(ids);
+
+    const now = Date.now();
+    for (const id of ids) seenIds.set(id, now);
+    triggerRefresh();
 
     return ids;
   };
 
-  const onUpdate = async (params: UpdateMutationFnParams<TItem>) => {
-    const mutations = params.transaction.mutations;
-
-    await db.transaction("rw", table, async () => {
+  const onUpdate = async (updateParams: UpdateMutationFnParams<TItem>) => {
+    updateParams.collection.startSyncImmediate();
+    const mutations = updateParams.transaction.mutations;
+    await db.transaction(`rw`, table, async () => {
       for (const mutation of mutations) {
         const key = mutation.key;
-
-        if (config.rowUpdateMode === "full") {
-          // Full replacement
-          const item = serialize(mutation.modified);
+        if (config.rowUpdateMode === `full`) {
+          const item = serialize(mutation.modified, true);
           const updateItem = {
             ...item,
             id: key,
-            updatedAt: new Date().toISOString(),
-          } as Record<string, unknown> & { id: string; updatedAt: string };
-
+          } as Record<string, unknown> & { id: string | number };
           await table.put(updateItem);
         } else {
-          // Partial update (default)
-          const changes = serialize(mutation.changes as TItem);
-          const updateChanges = {
-            ...changes,
-            updatedAt: new Date().toISOString(),
-          } as Record<string, unknown>;
-
-          await table.update(key, updateChanges);
+          const changes = serialize(mutation.changes as TItem, true);
+          await table.update(key, changes);
         }
       }
     });
-
-    // Wait for the IDs to be synced back
     const ids = mutations.map((m) => m.key);
-    await awaitIds(ids);
-
+    const now = Date.now();
+    for (const id of ids) seenIds.set(id, now);
+    triggerRefresh();
     return ids;
   };
 
-  const onDelete = async (params: DeleteMutationFnParams<TItem>) => {
-    const mutations = params.transaction.mutations;
+  const onDelete = async (deleteParams: DeleteMutationFnParams<TItem>) => {
+    // Ensure sync is started so deletions are observed by liveQuery
+    deleteParams.collection.startSyncImmediate();
+
+    const mutations = deleteParams.transaction.mutations;
     const ids = mutations.map((m) => m.key);
 
-    // Perform bulk deletion
-    await db.transaction("rw", table, async () => {
+    // bulk delete
+
+    await db.transaction(`rw`, table, async () => {
       await table.bulkDelete(ids);
     });
 
-    // Clean up seen IDs for deleted records
     ids.forEach((id) => seenIds.delete(id));
 
     return ids;
   };
 
-  // Enhanced utils following the create-collection.md patterns
   const utils: DexieUtils = {
-    getTable: () => table as Table<Record<string, unknown>, string>,
+    getTable: () => table as Table<Record<string, unknown>, string | number>,
     awaitIds,
     refresh: triggerRefresh,
     refetch: async () => {
-      // Trigger the liveQuery refresh and yield to the event loop
       triggerRefresh();
-      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 20));
     },
   };
 
@@ -417,7 +690,7 @@ export function dexieCollectionOptions<
     id: config.id,
     schema: config.schema,
     getKey: config.getKey,
-    rowUpdateMode: config.rowUpdateMode ?? "partial",
+    rowUpdateMode: config.rowUpdateMode ?? `partial`,
     sync: { sync },
     onInsert,
     onUpdate,

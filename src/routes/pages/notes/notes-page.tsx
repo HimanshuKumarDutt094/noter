@@ -146,11 +146,11 @@ export function NotesPage() {
   // Update an existing note
   const handleUpdateNote = useCallback(async (note: Note) => {
     try {
-      const updater = (id: string, cb: (draft: Note) => void) => {
-        baseNotesCollection.update(id, cb);
+      const updater = async (id: string, cb: (draft: Note) => void) => {
+        await baseNotesCollection.update(id, cb);
       };
 
-      updater(note.id, (draft) => {
+      await updater(note.id, (draft) => {
         Object.assign(draft, {
           ...note,
           updatedAt: nowIso(),
@@ -183,7 +183,7 @@ export function NotesPage() {
   // Delete a note
   const handleDeleteNote = useCallback(async (id: string) => {
     try {
-      baseNotesCollection.delete(id);
+      await baseNotesCollection.delete(id);
 
       toast.success("Note moved to trash");
     } catch (error) {
@@ -211,7 +211,7 @@ export function NotesPage() {
       keepTags,
     }: MoveNotePayload) => {
       try {
-        baseNotesCollection.update(noteId, (draft) => {
+        await baseNotesCollection.update(noteId, (draft) => {
           draft.projectIds = Array.isArray(projectIds) ? projectIds : [];
           if (!keepCategories) draft.categoryIds = [];
           if (!keepTags) draft.tagIds = [];
@@ -236,15 +236,23 @@ export function NotesPage() {
         const original = (notes as Note[])?.find((n) => n.id === id);
         if (!original) return;
         const now = nowIso();
+
+        const { ...clean } = original;
+
+        const newIdVal = newId();
         baseNotesCollection.insert({
-          ...original,
-          id: newId(),
+          ...clean,
+          id: newIdVal,
           title: original.title
             ? `${original.title} (Copy)`
             : "Untitled Note (Copy)",
           createdAt: now,
           updatedAt: now,
         });
+
+        // wait for the reactive layer / dexie ack
+        await baseNotesCollection.utils.awaitIds([newIdVal]);
+
         toast.success("Note cloned");
       } catch (error) {
         console.error("Error cloning note:", error);
@@ -258,7 +266,7 @@ export function NotesPage() {
   const handleTogglePin = useCallback(
     async (id: string) => {
       try {
-        baseNotesCollection.update(id, (draft) => {
+        await baseNotesCollection.update(id, (draft) => {
           // Toggle the current state - the draft contains the most current data
           draft.isPinned = !draft.isPinned;
           draft.updatedAt = nowIso();
@@ -277,7 +285,7 @@ export function NotesPage() {
   // Archive a note
   const handleArchiveNote = useCallback(async (id: string) => {
     try {
-      baseNotesCollection.update(id, (draft) => {
+      await baseNotesCollection.update(id, (draft) => {
         draft.isArchived = true;
         draft.updatedAt = nowIso();
       });
@@ -371,8 +379,8 @@ export function NotesPage() {
       importedNotes: Array<Omit<Note, "id" | "createdAt" | "updatedAt">>
     ) => {
       try {
-        importedNotes.forEach((note) => {
-          baseNotesCollection.insert({
+        importedNotes.forEach(async (note) => {
+          await baseNotesCollection.insert({
             ...note,
             id: newId(),
             createdAt: nowIso(),

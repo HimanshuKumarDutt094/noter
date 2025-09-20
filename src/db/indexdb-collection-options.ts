@@ -13,7 +13,7 @@ interface IndexDBCollectionConfig<TItem extends object> {
   // Core collection config fields we use
   id: string;
   getKey?: (item: TItem) => string | number | undefined;
-  dbName?: string; // Optional database name, defaults to 'todoist'
+  dbName?: string; // Optional database name, defaults to 'noter'
   tableName: string; // Required table name
   schema?: StandardSchemaV1<TItem>; // Optional schema for validation/type inference
   // Optional codec for parse/serialize to preserve typed fields

@@ -23,7 +23,7 @@ const baseNotesCollection = createCollection(
     id: "notes",
     schema: NoteSchema,
     tableName: "notes",
-    dbName: "todoist",
+    dbName: "noter",
     getKey: (item) => item.id,
   })
 );
@@ -34,7 +34,7 @@ const basePreferencesCollection = createCollection(
     id: "preferences",
     schema: PreferencesSchema,
     tableName: "preferences",
-    dbName: "todoist",
+    dbName: "noter",
     getKey: (item) => item.id,
   })
 );
@@ -53,7 +53,7 @@ const baseProjectsCollection = createCollection(
     id: "projects",
     schema: ProjectSchema,
     tableName: "projects",
-    dbName: "todoist",
+    dbName: "noter",
     getKey: (item) => item.id,
   })
 );
@@ -173,7 +173,7 @@ const baseCategoriesCollection = createCollection(
     id: "categories",
     schema: CategorySchema,
     tableName: "categories",
-    dbName: "todoist",
+    dbName: "noter",
     getKey: (item) => item.id,
   })
 );
@@ -183,7 +183,7 @@ const baseTagsCollection = createCollection(
     id: "tags",
     schema: TagSchema,
     tableName: "tags",
-    dbName: "todoist",
+    dbName: "noter",
     getKey: (item) => item.id,
   })
 );
